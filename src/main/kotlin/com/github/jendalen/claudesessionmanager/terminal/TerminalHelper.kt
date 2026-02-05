@@ -515,11 +515,24 @@ object TerminalHelper {
         applyIconToContent(content, icon)
 
         // Also apply with delays to override terminal's icon management
-        // The terminal plugin may set its icon after content creation
         val alarm = com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD)
         alarm.addRequest({ applyIconToContent(content, icon) }, 100)
         alarm.addRequest({ applyIconToContent(content, icon) }, 500)
         alarm.addRequest({ applyIconToContent(content, icon) }, 1000)
+    }
+
+    /**
+     * Removes the Claude icon from a Content.
+     */
+    fun removeClaudeIconFromContent(content: Content) {
+        try {
+            // Reset icon (terminal will restore its default)
+            content.icon = null
+            content.putUserData(ToolWindow.SHOW_CONTENT_ICON, false)
+            logger.debug("Removed Claude icon from '${content.displayName}'")
+        } catch (e: Exception) {
+            logger.warn("Failed to remove Claude icon from '${content.displayName}': ${e.message}", e)
+        }
     }
 
     private fun applyIconToContent(content: Content, icon: javax.swing.Icon) {

@@ -39,8 +39,8 @@ class UnbindSessionAction : AnAction() {
 
         bindingService.deleteBinding(binding.id)
 
-        // Remove Claude icon from the tab
-        context.content?.let { it.icon = null }
+        // Remove Claude icon and prefix from the tab
+        context.content?.let { TerminalHelper.removeClaudeIconFromContent(it) }
 
         showNotification(project, "Session binding removed", NotificationType.INFORMATION)
         logger.info("Unbound terminal '${tabIdentifier.name}' from session ${binding.currentSessionId}")
