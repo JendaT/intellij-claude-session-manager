@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IntelliJ Platform cache
+.intellijPlatform/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Local configuration
+local.properties

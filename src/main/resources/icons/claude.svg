@@ -1,0 +1,5 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Claude-inspired icon: stylized C shape -->
+  <circle cx="8" cy="8" r="6" stroke="#DA7756" stroke-width="2" fill="none"/>
+  <path d="M11 5.5C10.2 4.5 9.2 4 8 4C5.8 4 4 5.8 4 8C4 10.2 5.8 12 8 12C9.2 12 10.2 11.5 11 10.5" stroke="#DA7756" stroke-width="2" stroke-linecap="round" fill="none"/>
+</svg>
