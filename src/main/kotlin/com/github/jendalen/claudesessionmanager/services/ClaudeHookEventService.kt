@@ -363,20 +363,10 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                         logger.debug("Session $sessionId already bound to '$tabName'")
                     }
                 } else {
-                    // Create new binding
-                    bindingService.createBinding(tabIdentifier, sessionId)
-                    logger.info("Auto-bound tab '$tabName' to session $sessionId (source=$source)")
-
-                    // Set Claude icon
-                    TerminalHelper.setClaudeIconOnContent(selectedContent)
-
-                    if (settings.notifyOnAutoDetection) {
-                        showNotification(
-                            "Claude session detected",
-                            "Auto-bound '$tabName' to: ${session.displaySummary()}",
-                            NotificationType.INFORMATION
-                        )
-                    }
+                    // Don't auto-create bindings from hook events - we can't reliably know
+                    // which terminal tab the Claude session is actually running in.
+                    // New bindings should be created via manual binding or terminal output monitoring.
+                    logger.debug("No existing binding for focused tab '$tabName', skipping auto-bind (session=$sessionId, source=$source)")
                 }
             } catch (e: Exception) {
                 logger.warn("Failed to bind to focused terminal: ${e.message}", e)
