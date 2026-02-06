@@ -4,25 +4,32 @@
     <vendor email="jenda@dalen.cz" url="https://github.com/jendalen">Jan Dalen</vendor>
 
     <description><![CDATA[
-        <p>Manage Claude Code sessions in JetBrains IDEs.</p>
+        Persist Claude Code sessions across terminal tabs in JetBrains IDEs.
 
-        <p><strong>Features:</strong></p>
+        Keep multiple Claude sessions organized - each terminal tab remembers its session.
+        Sessions auto-resume when you restart the IDE.
+
+        <b>Features:</b>
         <ul>
-            <li>Bind Claude sessions to terminal tabs</li>
-            <li>Auto-resume sessions when IDE restarts</li>
-            <li>Track session changes from /clear and /compact</li>
+            <li>Bind sessions to tabs automatically or manually</li>
+            <li>Auto-resume on IDE restart</li>
             <li>Session history per tab</li>
-            <li>Works alongside the official Claude Code plugin</li>
+            <li>Detects /clear, /compact, /resume changes</li>
         </ul>
 
-        <p><strong>Requirements:</strong></p>
-        <ul>
-            <li>Claude Code CLI installed</li>
-            <li>JetBrains IDE 2024.2 or later</li>
-        </ul>
+        <b>Setup:</b> After installation, go to Settings > Tools > Claude Session Manager
+        and click "Install Hooks" to enable session detection.
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.2.0</h3>
+        <ul>
+            <li>New: Hook integration manager in settings (install/revert with transparency)</li>
+            <li>New: Settings action in context menu with "(action required)" indicator</li>
+            <li>Improved: Coroutine lifecycle and thread safety</li>
+            <li>Fixed: Memory leaks, date parsing, cache state issues</li>
+        </ul>
+
         <h3>0.1.0</h3>
         <ul>
             <li>Initial release</li>
@@ -39,6 +46,10 @@
         <applicationService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.SettingsService"
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.SettingsService"/>
+
+        <applicationService
+            serviceInterface="com.github.jendalen.claudesessionmanager.services.ClaudeHookManager"
+            serviceImplementation="com.github.jendalen.claudesessionmanager.services.ClaudeHookManager"/>
 
         <!-- Project-level services -->
         <projectService
@@ -74,15 +85,6 @@
         <!-- Auto-resume sessions on IDE startup -->
         <postStartupActivity
             implementation="com.github.jendalen.claudesessionmanager.services.AutoResumeService"/>
-
-        <!-- Tool window (Phase 5) -->
-        <!--
-        <toolWindow
-            id="Claude Sessions"
-            anchor="right"
-            factoryClass="com.github.jendalen.claudesessionmanager.ui.SessionsToolWindowFactory"
-            icon="/icons/claude-sessions.svg"/>
-        -->
     </extensions>
 
     <!-- Terminal plugin extensions -->
@@ -128,6 +130,13 @@
                     class="com.github.jendalen.claudesessionmanager.actions.UnbindSessionAction"
                     text="Unbind Session"
                     description="Remove Claude session binding from this tab"/>
+
+            <separator/>
+
+            <action id="ClaudeSessionManager.OpenSettings"
+                    class="com.github.jendalen.claudesessionmanager.actions.OpenSettingsAction"
+                    text="Settings..."
+                    description="Open Claude Session Manager settings"/>
         </group>
 
         <!-- New Claude Session - available via Find Action, extension point handles dropdown -->
