@@ -4,7 +4,7 @@ import com.github.jendalen.claudesessionmanager.model.SessionHistoryEntry
 import com.github.jendalen.claudesessionmanager.services.BindingService
 import com.github.jendalen.claudesessionmanager.services.ClaudeSessionService
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.diagnostic.Logger
@@ -144,10 +144,7 @@ class SessionHistoryAction : ActionGroup() {
         }
 
         private fun showNotification(project: Project, message: String, type: NotificationType) {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup("ClaudeSessionManager")
-                .createNotification(message, type)
-                .notify(project)
+            NotificationHelper.show(project, message, type)
         }
     }
 }

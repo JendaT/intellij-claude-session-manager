@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.util
 
+import com.intellij.openapi.diagnostic.Logger
 import java.io.File
 
 /**
@@ -17,16 +18,36 @@ import java.io.File
  */
 object ClaudePathResolver {
 
+    private val logger = Logger.getInstance(ClaudePathResolver::class.java)
+
     /**
      * Returns the Claude home directory.
-     * Checks CLAUDE_HOME environment variable first, falls back to ~/.claude
+     * Checks CLAUDE_HOME environment variable first, falls back to ~/.claude.
+     * Validates the path to prevent path traversal attacks.
      */
     fun getClaudeHome(): File {
         val envHome = System.getenv("CLAUDE_HOME")
         return if (!envHome.isNullOrBlank()) {
-            File(envHome)
+            val file = File(envHome)
+            // SECURITY: Validate the path to prevent traversal attacks
+            validatePath(file, "CLAUDE_HOME")
+            file
         } else {
             File(System.getProperty("user.home"), ".claude")
+        }
+    }
+
+    /**
+     * Validates a path to prevent path traversal attacks.
+     * Logs a warning if the path appears suspicious.
+     */
+    private fun validatePath(file: File, source: String) {
+        val canonicalPath = file.canonicalPath
+        val absolutePath = file.absolutePath
+
+        // Check for path traversal attempts
+        if (absolutePath.contains("..") || canonicalPath != absolutePath.replace("//", "/")) {
+            logger.warn("Potential path traversal detected in $source: $absolutePath -> $canonicalPath")
         }
     }
 

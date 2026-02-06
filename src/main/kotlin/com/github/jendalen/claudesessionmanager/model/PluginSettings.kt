@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.model
 
+import com.intellij.openapi.diagnostic.Logger
 import kotlinx.serialization.Serializable
 
 /**
@@ -60,6 +61,8 @@ data class PluginSettings(
     val orphanedHistoryRetentionDays: Int = 30
 ) {
     companion object {
+        private val logger = Logger.getInstance(PluginSettings::class.java)
+
         val DEFAULT = PluginSettings()
 
         // Constraints
@@ -69,15 +72,38 @@ data class PluginSettings(
         const val MAX_DEBOUNCE_MS = 5000L
         const val MIN_HISTORY_SIZE = 5
         const val MAX_HISTORY_SIZE = 100
+        const val MIN_RETENTION_DAYS = 1
+        const val MAX_RETENTION_DAYS = 365
     }
 
     /**
      * Validates and returns a corrected copy of settings.
+     * Logs warnings when values are corrected.
      */
-    fun validated(): PluginSettings = copy(
-        autoResumeDelayMs = autoResumeDelayMs.coerceIn(MIN_AUTO_RESUME_DELAY_MS, MAX_AUTO_RESUME_DELAY_MS),
-        fileWatcherDebounceMs = fileWatcherDebounceMs.coerceIn(MIN_DEBOUNCE_MS, MAX_DEBOUNCE_MS),
-        maxHistoryPerBinding = maxHistoryPerBinding.coerceIn(MIN_HISTORY_SIZE, MAX_HISTORY_SIZE),
-        orphanedHistoryRetentionDays = orphanedHistoryRetentionDays.coerceIn(1, 365)
-    )
+    fun validated(): PluginSettings {
+        val correctedDelay = autoResumeDelayMs.coerceIn(MIN_AUTO_RESUME_DELAY_MS, MAX_AUTO_RESUME_DELAY_MS)
+        val correctedDebounce = fileWatcherDebounceMs.coerceIn(MIN_DEBOUNCE_MS, MAX_DEBOUNCE_MS)
+        val correctedHistory = maxHistoryPerBinding.coerceIn(MIN_HISTORY_SIZE, MAX_HISTORY_SIZE)
+        val correctedRetention = orphanedHistoryRetentionDays.coerceIn(MIN_RETENTION_DAYS, MAX_RETENTION_DAYS)
+
+        if (correctedDelay != autoResumeDelayMs) {
+            logger.warn("autoResumeDelayMs $autoResumeDelayMs out of range, corrected to $correctedDelay")
+        }
+        if (correctedDebounce != fileWatcherDebounceMs) {
+            logger.warn("fileWatcherDebounceMs $fileWatcherDebounceMs out of range, corrected to $correctedDebounce")
+        }
+        if (correctedHistory != maxHistoryPerBinding) {
+            logger.warn("maxHistoryPerBinding $maxHistoryPerBinding out of range, corrected to $correctedHistory")
+        }
+        if (correctedRetention != orphanedHistoryRetentionDays) {
+            logger.warn("orphanedHistoryRetentionDays $orphanedHistoryRetentionDays out of range, corrected to $correctedRetention")
+        }
+
+        return copy(
+            autoResumeDelayMs = correctedDelay,
+            fileWatcherDebounceMs = correctedDebounce,
+            maxHistoryPerBinding = correctedHistory,
+            orphanedHistoryRetentionDays = correctedRetention
+        )
+    }
 }

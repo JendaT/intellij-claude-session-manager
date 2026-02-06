@@ -80,7 +80,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
 
     // Convenience accessors
     var claudeCommand: String
-        get() = state.claudeCommand
+        get() = state.claudeCommand.ifBlank { "claude" }
         set(value) { state.claudeCommand = value.ifBlank { "claude" } }
 
     var autoResumeEnabled: Boolean

@@ -2,16 +2,20 @@ package com.github.jendalen.claudesessionmanager.terminal
 
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.services.SettingsService
+import com.github.jendalen.claudesessionmanager.util.SessionIdValidator
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import com.intellij.terminal.frontend.view.TerminalView
 import com.intellij.ui.content.Content
+import com.intellij.util.Alarm
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import org.jetbrains.plugins.terminal.ShellTerminalWidget
 import javax.swing.Icon
@@ -289,8 +293,16 @@ object TerminalHelper {
 
     /**
      * Builds the resume command using the configured Claude command.
+     * Validates session ID to prevent command injection.
+     *
+     * @throws IllegalArgumentException if sessionId is not a valid UUID
      */
     fun buildResumeCommand(sessionId: String): String {
+        // SECURITY: Validate session ID to prevent command injection
+        require(SessionIdValidator.isValid(sessionId)) {
+            "Invalid session ID format: $sessionId"
+        }
+        // Session ID is now guaranteed to be a valid UUID (alphanumeric + hyphens only)
         return "${getClaudeCommand()} --resume $sessionId"
     }
 
@@ -500,11 +512,18 @@ object TerminalHelper {
         }
     }
 
+    // Timing constants for icon application retry
+    private val ICON_APPLY_DELAYS_MS = listOf(100, 500, 1000)
+
     /**
      * Sets the Claude icon on a Content directly.
      * Uses delayed application to override terminal's default icon.
+     *
+     * @param content The content to set the icon on
+     * @param parentDisposable Optional parent disposable for alarm lifecycle management.
+     *                         If null, alarm will be disposed after last request completes.
      */
-    fun setClaudeIconOnContent(content: Content) {
+    fun setClaudeIconOnContent(content: Content, parentDisposable: Disposable? = null) {
         val icon = claudeIcon
         if (icon == null) {
             logger.warn("Cannot set icon - claudeIcon is null")
@@ -515,10 +534,21 @@ object TerminalHelper {
         applyIconToContent(content, icon)
 
         // Also apply with delays to override terminal's icon management
-        val alarm = com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD)
-        alarm.addRequest({ applyIconToContent(content, icon) }, 100)
-        alarm.addRequest({ applyIconToContent(content, icon) }, 500)
-        alarm.addRequest({ applyIconToContent(content, icon) }, 1000)
+        // Create alarm with proper lifecycle management to prevent memory leaks
+        val alarm = if (parentDisposable != null) {
+            Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
+        } else {
+            // Create a self-disposing alarm
+            val disposable = Disposer.newDisposable("ClaudeIconAlarm")
+            val a = Alarm(Alarm.ThreadToUse.SWING_THREAD, disposable)
+            // Schedule disposal after last request
+            a.addRequest({ Disposer.dispose(disposable) }, ICON_APPLY_DELAYS_MS.max() + 100)
+            a
+        }
+
+        for (delay in ICON_APPLY_DELAYS_MS) {
+            alarm.addRequest({ applyIconToContent(content, icon) }, delay)
+        }
     }
 
     /**

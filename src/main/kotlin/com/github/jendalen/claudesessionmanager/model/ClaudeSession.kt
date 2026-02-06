@@ -1,7 +1,9 @@
 package com.github.jendalen.claudesessionmanager.model
 
+import com.intellij.openapi.diagnostic.Logger
 import kotlinx.serialization.Serializable
 import java.time.Instant
+import java.time.format.DateTimeParseException
 
 /**
  * Represents a Claude Code session as stored in sessions-index.json.
@@ -25,15 +27,31 @@ data class ClaudeSession(
     val projectPath: String,
     val isSidechain: Boolean = false
 ) {
+    companion object {
+        private val logger = Logger.getInstance(ClaudeSession::class.java)
+    }
+
     /**
      * Returns the creation timestamp as Instant.
+     * Falls back to fileMtime if parsing fails.
      */
-    fun createdInstant(): Instant = Instant.parse(created)
+    fun createdInstant(): Instant = try {
+        Instant.parse(created)
+    } catch (e: DateTimeParseException) {
+        logger.warn("Failed to parse created timestamp '$created' for session $sessionId, using fileMtime")
+        Instant.ofEpochMilli(fileMtime)
+    }
 
     /**
      * Returns the modification timestamp as Instant.
+     * Falls back to fileMtime if parsing fails.
      */
-    fun modifiedInstant(): Instant = Instant.parse(modified)
+    fun modifiedInstant(): Instant = try {
+        Instant.parse(modified)
+    } catch (e: DateTimeParseException) {
+        logger.warn("Failed to parse modified timestamp '$modified' for session $sessionId, using fileMtime")
+        Instant.ofEpochMilli(fileMtime)
+    }
 
     /**
      * Returns the file modification time as Instant.

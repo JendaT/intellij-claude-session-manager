@@ -3,9 +3,12 @@ package com.github.jendalen.claudesessionmanager.services
 import com.github.jendalen.claudesessionmanager.model.SessionBinding
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.terminal.TerminalTabContext
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.util.Disposer
+import com.intellij.util.Alarm
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -157,14 +160,12 @@ class AutoResumeService : ProjectActivity {
     }
 
     private fun showSuccessNotification(project: Project, count: Int) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(
-                "Claude Sessions",
-                "$count session${if (count > 1) "s" else ""} resumed",
-                NotificationType.INFORMATION
-            )
-            .notify(project)
+        NotificationHelper.show(
+            project,
+            "Claude Sessions",
+            "$count session${if (count > 1) "s" else ""} resumed",
+            NotificationType.INFORMATION
+        )
     }
 
     private fun showMissingTabsNotification(
@@ -221,27 +222,33 @@ class AutoResumeService : ProjectActivity {
                 // Alternative: Use the old API if available
                 val widget = TerminalHelper.createNewTerminalTab(project, tabName)
                 if (widget != null) {
-                    // Delay to let terminal initialize
-                    com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD).addRequest({
-                        // Find the new tab and resume
-                        val terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
-                        val content = TerminalHelper.getTerminalToolWindow(project)
-                            ?.contentManager?.contents?.find { it.displayName == tabName }
+                    // Delay to let terminal initialize using a self-disposing alarm
+                    val alarmDisposable = Disposer.newDisposable("RecreateTabAlarm-$tabName")
+                    val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, alarmDisposable)
+                    alarm.addRequest({
+                        try {
+                            // Find the new tab and resume
+                            val terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
+                            val content = TerminalHelper.getTerminalToolWindow(project)
+                                ?.contentManager?.contents?.find { it.displayName == tabName }
 
-                        if (terminalView != null || content != null) {
-                            val context = TerminalTabContext(
-                                tabName = tabName,
-                                terminalView = terminalView,
-                                shellWidget = widget,
-                                content = content
-                            )
-                            val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
-                            if (success) {
-                                val bindingService = BindingService.getInstance(project)
-                                bindingService.markBindingResumed(binding.id)
-                                content?.let { TerminalHelper.setClaudeIconOnContent(it) }
-                                logger.info("Recreated and resumed tab '$tabName'")
+                            if (terminalView != null || content != null) {
+                                val context = TerminalTabContext(
+                                    tabName = tabName,
+                                    terminalView = terminalView,
+                                    shellWidget = widget,
+                                    content = content
+                                )
+                                val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
+                                if (success) {
+                                    val bindingService = BindingService.getInstance(project)
+                                    bindingService.markBindingResumed(binding.id)
+                                    content?.let { TerminalHelper.setClaudeIconOnContent(it) }
+                                    logger.info("Recreated and resumed tab '$tabName'")
+                                }
                             }
+                        } finally {
+                            Disposer.dispose(alarmDisposable)
                         }
                     }, 500)
                     createdCount++
@@ -259,9 +266,6 @@ class AutoResumeService : ProjectActivity {
     }
 
     private fun showNotification(project: Project, message: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification("Claude Sessions", message, type)
-            .notify(project)
+        NotificationHelper.show(project, "Claude Sessions", message, type)
     }
 }

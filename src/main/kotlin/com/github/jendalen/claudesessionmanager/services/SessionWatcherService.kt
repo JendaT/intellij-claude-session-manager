@@ -1,7 +1,7 @@
 package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -27,9 +27,21 @@ class SessionWatcherService(private val project: Project) : Disposable {
     private var watchService: WatchService? = null
     private var watchThread: Thread? = null
     private val debounceAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
+    @Volatile
     private var lastKnownSessions: Map<String, Long> = emptyMap() // sessionId -> modified timestamp
+    @Volatile
     private var isWatching = false
     private var sessionsFilePath: Path? = null
+
+    // File stability check constants
+    companion object {
+        private const val FILE_STABILITY_DELAY_MS = 100L
+        private const val FILE_MODIFICATION_THRESHOLD_MS = 1000L
+
+        fun getInstance(project: Project): SessionWatcherService {
+            return project.getService(SessionWatcherService::class.java)
+        }
+    }
 
     /**
      * Starts watching the sessions-index.json file using native file system watching.
@@ -133,9 +145,40 @@ class SessionWatcherService(private val project: Project) : Disposable {
     }
 
     /**
+     * Checks if a file is stable (not being written to).
+     * Returns true if the file size and mtime haven't changed over the stability delay.
+     */
+    private fun isFileStable(file: java.io.File): Boolean {
+        if (!file.exists()) return false
+
+        val size1 = file.length()
+        val mtime1 = file.lastModified()
+
+        try {
+            Thread.sleep(FILE_STABILITY_DELAY_MS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+
+        val size2 = file.length()
+        val mtime2 = file.lastModified()
+
+        return size1 == size2 && mtime1 == mtime2
+    }
+
+    /**
      * Reconciles bindings with current session state.
      */
     private fun reconcileBindings() {
+        // Check file stability before reading to avoid partial reads
+        val sessionsFile = ClaudeSessionService.getInstance(project).getSessionsIndexFile()
+        if (sessionsFile != null && !isFileStable(sessionsFile)) {
+            logger.debug("Sessions file not stable, skipping reconciliation")
+            scheduleReconciliation() // Retry
+            return
+        }
+
         logger.debug("Reconciling bindings with sessions-index.json")
 
         val sessionService = ClaudeSessionService.getInstance(project)
@@ -158,8 +201,8 @@ class SessionWatcherService(private val project: Project) : Disposable {
                 // New session
                 true
             } else {
-                // Modified since last check (more than 1 second difference)
-                kotlin.math.abs(session.fileMtime - lastKnownMtime) > 1000
+                // Modified since last check (more than threshold difference)
+                kotlin.math.abs(session.fileMtime - lastKnownMtime) > FILE_MODIFICATION_THRESHOLD_MS
             }
         }
 
@@ -300,19 +343,10 @@ class SessionWatcherService(private val project: Project) : Disposable {
     }
 
     private fun showNotification(title: String, content: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(title, content, type)
-            .notify(project)
+        NotificationHelper.show(project, title, content, type)
     }
 
     override fun dispose() {
         stopWatching()
-    }
-
-    companion object {
-        fun getInstance(project: Project): SessionWatcherService {
-            return project.getService(SessionWatcherService::class.java)
-        }
     }
 }

@@ -2,7 +2,7 @@ package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -36,19 +36,23 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
     private val logger = Logger.getInstance(TerminalOutputMonitorService::class.java)
 
+    // Constants for buffer and timing
+    companion object {
+        private const val MAX_BUFFER_SIZE = 10000
+        private const val BUFFER_TRIM_SIZE = 5000
+        private const val RECENT_SESSION_THRESHOLD_MS = 30000L
+        private const val SESSION_VERIFICATION_DELAY_MS = 1500L
+        private const val LOG_TRUNCATE_LENGTH = 100
+
+        fun getInstance(project: Project): TerminalOutputMonitorService {
+            return project.getService(TerminalOutputMonitorService::class.java)
+        }
+    }
+
     // UUID pattern for session IDs
     private val sessionIdPattern = Pattern.compile(
         "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
         Pattern.CASE_INSENSITIVE
-    )
-
-    // Patterns that indicate Claude is outputting a session ID
-    private val sessionStartPatterns = listOf(
-        Pattern.compile("Session:\\s*([0-9a-f-]{36})", Pattern.CASE_INSENSITIVE),
-        Pattern.compile("session[_-]?id[:\\s]+([0-9a-f-]{36})", Pattern.CASE_INSENSITIVE),
-        Pattern.compile("Resuming session:\\s*([0-9a-f-]{36})", Pattern.CASE_INSENSITIVE),
-        Pattern.compile("Starting new session:\\s*([0-9a-f-]{36})", Pattern.CASE_INSENSITIVE),
-        Pattern.compile("\\[session:\\s*([0-9a-f-]{36})\\]", Pattern.CASE_INSENSITIVE)
     )
 
     // Track monitored tabs to avoid duplicate listeners
@@ -162,7 +166,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                     if (event.isTrimming) return
 
                     // Log content changes (truncate for readability)
-                    val logText = if (newText.length > 100) newText.take(100) + "..." else newText
+                    val logText = if (newText.length > LOG_TRUNCATE_LENGTH) newText.take(LOG_TRUNCATE_LENGTH) + "..." else newText
                     logger.debug("Content changed in '$tabName': ${logText.replace("\n", "\\n")}")
 
                     // Process the new text for session IDs
@@ -189,8 +193,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         tabMonitor.textBuffer.append(text)
 
         // Limit buffer size to prevent memory issues
-        if (tabMonitor.textBuffer.length > 10000) {
-            tabMonitor.textBuffer.delete(0, tabMonitor.textBuffer.length - 5000)
+        if (tabMonitor.textBuffer.length > MAX_BUFFER_SIZE) {
+            tabMonitor.textBuffer.delete(0, tabMonitor.textBuffer.length - BUFFER_TRIM_SIZE)
         }
 
         val bufferText = tabMonitor.textBuffer.toString()
@@ -219,7 +223,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             if (matchingSession != null) {
                 // Check if this is a "recent" session (modified in last 30 seconds)
                 val now = System.currentTimeMillis()
-                val isRecentSession = (now - matchingSession.fileMtime) < 30000
+                val isRecentSession = (now - matchingSession.fileMtime) < RECENT_SESSION_THRESHOLD_MS
 
                 if (isRecentSession || foundUuids.size == 1) {
                     logger.info("Found valid session ID in terminal '$tabName': $uuid (recent=$isRecentSession)")
@@ -280,7 +284,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     private fun scheduleSessionVerification(tabMonitor: TabMonitor, sessionId: String) {
         scope.launch {
             // Wait for session to be written to index
-            kotlinx.coroutines.delay(1500)
+            kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
 
             val sessionService = ClaudeSessionService.getInstance(project)
             sessionService.invalidateCache()
@@ -380,10 +384,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     }
 
     private fun showNotification(title: String, content: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(title, content, type)
-            .notify(project)
+        NotificationHelper.show(project, title, content, type)
     }
 
     override fun dispose() {
@@ -400,10 +401,4 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         var lastDetectedSessionId: String? = null,
         val textBuffer: StringBuilder = StringBuilder()
     )
-
-    companion object {
-        fun getInstance(project: Project): TerminalOutputMonitorService {
-            return project.getService(TerminalOutputMonitorService::class.java)
-        }
-    }
 }

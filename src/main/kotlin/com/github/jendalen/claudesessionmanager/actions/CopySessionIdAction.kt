@@ -2,7 +2,7 @@ package com.github.jendalen.claudesessionmanager.actions
 
 import com.github.jendalen.claudesessionmanager.services.BindingService
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -69,9 +69,6 @@ class CopySessionIdAction : AnAction() {
     }
 
     private fun showNotification(project: Project, message: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(message, type)
-            .notify(project)
+        NotificationHelper.show(project, message, type)
     }
 }

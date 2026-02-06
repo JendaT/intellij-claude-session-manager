@@ -2,7 +2,7 @@ package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -399,10 +399,7 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     }
 
     private fun showNotification(title: String, content: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(title, content, type)
-            .notify(project)
+        NotificationHelper.show(project, title, content, type)
     }
 
     override fun dispose() {

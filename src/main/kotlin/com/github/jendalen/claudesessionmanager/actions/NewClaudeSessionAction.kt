@@ -3,13 +3,15 @@ package com.github.jendalen.claudesessionmanager.actions
 import com.github.jendalen.claudesessionmanager.services.BindingService
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.ui.SessionPickerDialog
-import com.intellij.notification.NotificationGroupManager
+import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
+import com.intellij.util.Alarm
 
 /**
  * Action to create a new terminal tab with a Claude session.
@@ -46,10 +48,17 @@ class NewClaudeSessionAction : AnAction() {
         bindingService.createBinding(tabIdentifier, selectedSession.sessionId)
 
         // Resume the session after a short delay to let terminal initialize
-        com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD).addRequest({
-            TerminalHelper.resumeClaudeSession(widget, selectedSession.sessionId)
-            bindingService.findBindingForTab(tabIdentifier)?.let {
-                bindingService.markBindingResumed(it.id)
+        // Use a self-disposing alarm to prevent memory leaks
+        val alarmDisposable = Disposer.newDisposable("NewClaudeSessionAlarm")
+        val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, alarmDisposable)
+        alarm.addRequest({
+            try {
+                TerminalHelper.resumeClaudeSession(widget, selectedSession.sessionId)
+                bindingService.findBindingForTab(tabIdentifier)?.let {
+                    bindingService.markBindingResumed(it.id)
+                }
+            } finally {
+                Disposer.dispose(alarmDisposable)
             }
         }, 500)
 
@@ -61,9 +70,6 @@ class NewClaudeSessionAction : AnAction() {
     }
 
     private fun showNotification(project: Project, message: String, type: NotificationType) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification(message, type)
-            .notify(project)
+        NotificationHelper.show(project, message, type)
     }
 }

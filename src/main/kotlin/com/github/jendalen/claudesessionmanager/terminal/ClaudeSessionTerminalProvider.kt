@@ -7,10 +7,9 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.NlsActions
+import com.intellij.openapi.util.Disposer
 import com.intellij.util.Alarm
 import org.jetbrains.plugins.terminal.ui.OpenPredefinedTerminalActionProvider
-import javax.swing.Icon
 
 /**
  * Provides "Claude Session" option in the terminal's predefined sessions dropdown.
@@ -61,11 +60,18 @@ class ClaudeSessionTerminalProvider : OpenPredefinedTerminalActionProvider {
             bindingService.createBinding(tabIdentifier, selectedSession.sessionId)
 
             // Resume the session after terminal initializes
-            Alarm(Alarm.ThreadToUse.SWING_THREAD).addRequest({
-                TerminalHelper.resumeClaudeSession(widget, selectedSession.sessionId)
-                TerminalHelper.setClaudeIconOnTab(project, tabName)
-                bindingService.findBindingForTab(tabIdentifier)?.let {
-                    bindingService.markBindingResumed(it.id)
+            // Use a self-disposing alarm to prevent memory leaks
+            val alarmDisposable = Disposer.newDisposable("ClaudeSessionTerminalAlarm")
+            val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, alarmDisposable)
+            alarm.addRequest({
+                try {
+                    TerminalHelper.resumeClaudeSession(widget, selectedSession.sessionId)
+                    TerminalHelper.setClaudeIconOnTab(project, tabName)
+                    bindingService.findBindingForTab(tabIdentifier)?.let {
+                        bindingService.markBindingResumed(it.id)
+                    }
+                } finally {
+                    Disposer.dispose(alarmDisposable)
                 }
             }, 500)
 

@@ -26,12 +26,14 @@ class ClaudeSessionService(private val project: Project) {
     }
 
     // Cached sessions index, invalidated on file changes
+    // Using a data class for atomic cache state to prevent race conditions
+    private data class CacheState(
+        val index: SessionsIndex?,
+        val path: String?,
+        val mtime: Long
+    )
     @Volatile
-    private var cachedIndex: SessionsIndex? = null
-    @Volatile
-    private var cachedIndexPath: String? = null
-    @Volatile
-    private var cachedIndexMtime: Long = 0
+    private var cacheState = CacheState(null, null, 0)
 
     /**
      * Returns the project's base path.
@@ -92,9 +94,7 @@ class ClaudeSessionService(private val project: Project) {
      * Forces a reload of the sessions index from disk.
      */
     fun invalidateCache() {
-        cachedIndex = null
-        cachedIndexPath = null
-        cachedIndexMtime = 0
+        cacheState = CacheState(null, null, 0)
     }
 
     /**
@@ -109,19 +109,19 @@ class ClaudeSessionService(private val project: Project) {
         val currentMtime = file.lastModified()
         val currentPath = file.absolutePath
 
-        // Return cached if still valid
-        if (cachedIndex != null &&
-            cachedIndexPath == currentPath &&
-            cachedIndexMtime == currentMtime) {
-            return cachedIndex
+        // Return cached if still valid (atomic read of cache state)
+        val currentCache = cacheState
+        if (currentCache.index != null &&
+            currentCache.path == currentPath &&
+            currentCache.mtime == currentMtime) {
+            return currentCache.index
         }
 
         return try {
             val content = file.readText()
             val index = json.decodeFromString<SessionsIndex>(content)
-            cachedIndex = index
-            cachedIndexPath = currentPath
-            cachedIndexMtime = currentMtime
+            // Atomic update of cache state
+            cacheState = CacheState(index, currentPath, currentMtime)
             logger.debug("Loaded sessions index: ${index.entries.size} entries")
             index
         } catch (e: Exception) {
