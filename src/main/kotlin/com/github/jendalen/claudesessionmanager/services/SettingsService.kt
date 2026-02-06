@@ -21,19 +21,21 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
 
     /**
      * Serializable state class for persistence.
+     * Note: Must be a regular class (not data class) for IntelliJ XML serialization.
+     * All properties must be var with default values and have public getters/setters.
      */
-    data class State(
-        var claudeCommand: String = "claude",
-        var autoResumeEnabled: Boolean = true,
-        var autoResumeDelayMs: Long = 2000,
-        var notifyOnSessionChange: Boolean = true,
-        var notifyOnAutoDetection: Boolean = true,
-        var syncTabNames: Boolean = true,
-        var customClaudeHomePath: String? = null,
-        var fileWatcherDebounceMs: Long = 500,
-        var maxHistoryPerBinding: Int = 20,
+    class State {
+        var claudeCommand: String = "claude"
+        var autoResumeEnabled: Boolean = true
+        var autoResumeDelayMs: Long = 2000
+        var notifyOnSessionChange: Boolean = true
+        var notifyOnAutoDetection: Boolean = true
+        var syncTabNames: Boolean = true
+        var customClaudeHomePath: String? = null
+        var fileWatcherDebounceMs: Long = 500
+        var maxHistoryPerBinding: Int = 20
         var orphanedHistoryRetentionDays: Int = 30
-    )
+    }
 
     private var state = State()
 
@@ -64,18 +66,16 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
      */
     fun updateSettings(settings: PluginSettings) {
         val validated = settings.validated()
-        state = State(
-            claudeCommand = validated.claudeCommand,
-            autoResumeEnabled = validated.autoResumeEnabled,
-            autoResumeDelayMs = validated.autoResumeDelayMs,
-            notifyOnSessionChange = validated.notifyOnSessionChange,
-            notifyOnAutoDetection = validated.notifyOnAutoDetection,
-            syncTabNames = validated.syncTabNames,
-            customClaudeHomePath = validated.customClaudeHomePath,
-            fileWatcherDebounceMs = validated.fileWatcherDebounceMs,
-            maxHistoryPerBinding = validated.maxHistoryPerBinding,
-            orphanedHistoryRetentionDays = validated.orphanedHistoryRetentionDays
-        )
+        state.claudeCommand = validated.claudeCommand
+        state.autoResumeEnabled = validated.autoResumeEnabled
+        state.autoResumeDelayMs = validated.autoResumeDelayMs
+        state.notifyOnSessionChange = validated.notifyOnSessionChange
+        state.notifyOnAutoDetection = validated.notifyOnAutoDetection
+        state.syncTabNames = validated.syncTabNames
+        state.customClaudeHomePath = validated.customClaudeHomePath
+        state.fileWatcherDebounceMs = validated.fileWatcherDebounceMs
+        state.maxHistoryPerBinding = validated.maxHistoryPerBinding
+        state.orphanedHistoryRetentionDays = validated.orphanedHistoryRetentionDays
     }
 
     // Convenience accessors

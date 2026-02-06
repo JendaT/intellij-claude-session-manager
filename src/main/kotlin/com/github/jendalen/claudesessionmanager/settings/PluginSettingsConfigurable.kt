@@ -117,7 +117,7 @@ class PluginSettingsConfigurable : Configurable {
                     textField()
                         .bindText(::claudeCommand)
                         .columns(20)
-                        .comment("Claude CLI command (e.g., 'claude' or 'claude-x')")
+                        .comment("e.g., 'claude' or another alias which runs Claude with your preferred settings")
                 }
                 row("Home directory:") {
                     textField()
