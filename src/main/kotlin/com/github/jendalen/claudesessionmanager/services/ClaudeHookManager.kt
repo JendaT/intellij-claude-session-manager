@@ -100,7 +100,8 @@ class ClaudeHookManager {
         val hookScript = File(claudeHome, "hooks/$HOOK_SCRIPT_NAME")
         val issues = mutableListOf<String>()
 
-        val hookScriptExists = hookScript.exists() && hookScript.readText().contains(HOOK_MARKER)
+        // Check if script exists and writes to ide-events (compatible with manual installs too)
+        val hookScriptExists = hookScript.exists() && hookScript.readText().contains("ide-events")
         val hookInSettings = checkHookInSettings(settingsFile)
 
         if (!settingsFile.exists()) {
