@@ -13,6 +13,8 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.terminal.frontend.toolwindow.TerminalTabsManagerListener
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
+import com.intellij.ui.content.Content
+import java.beans.PropertyChangeListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,6 +111,17 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             logger.debug("Tab '$tabName' already monitored")
             return
         }
+
+        // Listen for tab renames to update bindings
+        val content = tab.content
+        val renameListener = PropertyChangeListener { evt ->
+            if (evt.propertyName == Content.PROP_DISPLAY_NAME) {
+                val oldName = evt.oldValue as? String ?: return@PropertyChangeListener
+                val newName = evt.newValue as? String ?: return@PropertyChangeListener
+                handleTabRenamed(oldName, newName)
+            }
+        }
+        content.addPropertyChangeListener(renameListener)
 
         try {
             val terminalView = tab.view
@@ -365,6 +378,42 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         if (monitor != null) {
             Disposer.dispose(monitor.disposable)
             logger.debug("Stopped monitoring tab '$tabName'")
+        }
+    }
+
+    /**
+     * Handles tab rename events - updates binding if one exists.
+     */
+    private fun handleTabRenamed(oldName: String, newName: String) {
+        if (oldName == newName) return
+
+        logger.info("Terminal tab renamed: '$oldName' -> '$newName'")
+
+        // Update the monitoredTabs map
+        val monitor = monitoredTabs.remove(oldName)
+        if (monitor != null) {
+            monitoredTabs[newName] = monitor
+        }
+
+        // Update binding if one exists for the old name
+        val bindingService = BindingService.getInstance(project)
+        val oldTabIdentifier = TabIdentifier(
+            name = oldName,
+            createdAt = System.currentTimeMillis(),
+            shellPid = null,
+            workingDirectory = null
+        )
+
+        val binding = bindingService.findBindingForTab(oldTabIdentifier)
+        if (binding != null) {
+            val newTabIdentifier = TabIdentifier(
+                name = newName,
+                createdAt = System.currentTimeMillis(),
+                shellPid = null,
+                workingDirectory = null
+            )
+            bindingService.updateBindingTab(binding.id, newTabIdentifier)
+            logger.info("Updated binding for renamed tab: '$oldName' -> '$newName'")
         }
     }
 
