@@ -9,6 +9,12 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -28,12 +34,30 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    // Coroutine scope for async retry operations
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
     private var watchService: WatchService? = null
     private var watchThread: Thread? = null
+    @Volatile
     private var isWatching = false
 
     // Track last processed event to avoid duplicates
+    @Volatile
     private var lastProcessedTimestamp: Long = 0
+
+    // Constants for retry delays
+    companion object {
+        private val STARTUP_RETRY_DELAYS_MS = listOf(1000L, 2000L, 5000L, 10000L)
+        private const val EXISTING_SESSION_RETRY_DELAY_MS = 500L
+        private const val FILE_WRITE_DELAY_MS = 50L
+        private const val FILE_RECHECK_DELAY_MS = 200L
+        private const val POLL_INTERVAL_SECONDS = 5
+
+        fun getInstance(project: Project): ClaudeHookEventService {
+            return project.getService(ClaudeHookEventService::class.java)
+        }
+    }
 
     @Serializable
     data class SessionEvent(
@@ -87,19 +111,19 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                                 if (filename?.toString() == "current-session.json") {
                                     logger.debug("Detected change in current-session.json")
                                     // Small delay to ensure file write is complete (events can fire rapidly)
-                                    Thread.sleep(50)
+                                    Thread.sleep(FILE_WRITE_DELAY_MS)
                                     processSessionEvent(eventFile)
                                     // Check again after a short delay in case another write happened
-                                    Thread.sleep(200)
+                                    Thread.sleep(FILE_RECHECK_DELAY_MS)
                                     processSessionEvent(eventFile)
                                 }
                             }
                             key.reset()
                         }
 
-                        // Periodic fallback poll every 5 seconds to catch any missed events
+                        // Periodic fallback poll every POLL_INTERVAL_SECONDS to catch any missed events
                         pollCounter++
-                        if (pollCounter >= 5) {
+                        if (pollCounter >= POLL_INTERVAL_SECONDS) {
                             pollCounter = 0
                             if (eventFile.exists()) {
                                 processSessionEvent(eventFile)
@@ -229,45 +253,27 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         }
 
         // For startup, session might not be created until first message
-        // Schedule retries with increasing delays
+        // Schedule retries with increasing delays using coroutines
         logger.info("Session ${event.sessionId} not yet in index, scheduling retries for startup event")
 
-        val retryDelays = listOf(1000L, 2000L, 5000L, 10000L) // 1s, 2s, 5s, 10s
-        var retryIndex = 0
-
-        fun scheduleRetry() {
-            if (retryIndex >= retryDelays.size) {
-                logger.warn("Session ${event.sessionId} not found after all retries")
-                return
-            }
-
-            val delay = retryDelays[retryIndex]
-            retryIndex++
-
-            Thread {
-                try {
-                    Thread.sleep(delay)
-                    sessionService.invalidateCache()
-                    val foundSession = sessionService.getSessions().find {
-                        it.sessionId.equals(event.sessionId, ignoreCase = true)
-                    }
-
-                    if (foundSession != null) {
-                        logger.info("Session ${event.sessionId} found after ${delay}ms delay")
-                        bindToFocusedTerminal(event.sessionId, foundSession, event.source)
-                    } else {
-                        logger.debug("Session ${event.sessionId} still not found after ${delay}ms, retrying...")
-                        scheduleRetry()
-                    }
-                } catch (e: InterruptedException) {
-                    logger.debug("Retry interrupted")
-                } catch (e: Exception) {
-                    logger.warn("Error during retry: ${e.message}")
+        scope.launch {
+            for ((index, delayMs) in STARTUP_RETRY_DELAYS_MS.withIndex()) {
+                delay(delayMs)
+                sessionService.invalidateCache()
+                val foundSession = sessionService.getSessions().find {
+                    it.sessionId.equals(event.sessionId, ignoreCase = true)
                 }
-            }.start()
-        }
 
-        scheduleRetry()
+                if (foundSession != null) {
+                    logger.info("Session ${event.sessionId} found after ${delayMs}ms delay")
+                    bindToFocusedTerminal(event.sessionId, foundSession, event.source)
+                    return@launch
+                } else {
+                    logger.debug("Session ${event.sessionId} still not found after ${delayMs}ms (attempt ${index + 1}/${STARTUP_RETRY_DELAYS_MS.size})")
+                }
+            }
+            logger.warn("Session ${event.sessionId} not found after all retries")
+        }
     }
 
     /**
@@ -281,22 +287,18 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         if (session == null) {
             // For resume/clear/compact, session should exist - try once more after short delay
             logger.debug("Session ${event.sessionId} not found for ${event.source} event, retrying once...")
-            Thread {
-                try {
-                    Thread.sleep(500)
-                    sessionService.invalidateCache()
-                    val foundSession = sessionService.getSessions().find {
-                        it.sessionId.equals(event.sessionId, ignoreCase = true)
-                    }
-                    if (foundSession != null) {
-                        bindToFocusedTerminal(event.sessionId, foundSession, event.source)
-                    } else {
-                        logger.warn("Session ${event.sessionId} not found for ${event.source} event")
-                    }
-                } catch (e: Exception) {
-                    logger.warn("Error during retry: ${e.message}")
+            scope.launch {
+                delay(EXISTING_SESSION_RETRY_DELAY_MS)
+                sessionService.invalidateCache()
+                val foundSession = sessionService.getSessions().find {
+                    it.sessionId.equals(event.sessionId, ignoreCase = true)
                 }
-            }.start()
+                if (foundSession != null) {
+                    bindToFocusedTerminal(event.sessionId, foundSession, event.source)
+                } else {
+                    logger.warn("Session ${event.sessionId} not found for ${event.source} event")
+                }
+            }
         } else {
             bindToFocusedTerminal(event.sessionId, session, event.source)
         }
@@ -404,11 +406,6 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
     override fun dispose() {
         stopWatching()
-    }
-
-    companion object {
-        fun getInstance(project: Project): ClaudeHookEventService {
-            return project.getService(ClaudeHookEventService::class.java)
-        }
+        scope.cancel()  // Cancel all coroutines to prevent resource leaks
     }
 }

@@ -15,7 +15,8 @@ import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTab
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.jetbrains.plugins.terminal.view.TerminalContentChangeEvent
@@ -58,8 +59,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     // Track monitored tabs to avoid duplicate listeners
     private val monitoredTabs = ConcurrentHashMap<String, TabMonitor>()
 
-    // Coroutine scope for async operations
-    private val scope = CoroutineScope(Dispatchers.Default + Job())
+    // Coroutine scope for async operations - use SupervisorJob for proper cancellation
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Track if service is active
     private var isActive = false
@@ -389,6 +390,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
     override fun dispose() {
         stopMonitoring()
+        scope.cancel()  // Cancel all coroutines to prevent resource leaks
     }
 
     /**
