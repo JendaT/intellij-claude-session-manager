@@ -1,0 +1,14 @@
+{
+  "name": "minimal-team",
+  "leadAgentId": "lead@minimal",
+  "createdAt": 1706000000000,
+  "members": [
+    {
+      "agentId": "lead@minimal",
+      "name": "team-lead",
+      "agentType": "team-lead",
+      "joinedAt": 1706000000000,
+      "backendType": "in-process"
+    }
+  ]
+}

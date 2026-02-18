@@ -1,0 +1,8 @@
+{
+  "type": "shutdown_request",
+  "sender": "team-lead",
+  "recipient": "worker-1",
+  "content": "Task complete, wrapping up",
+  "timestamp": 1706000300000,
+  "summary": ""
+}

@@ -1,0 +1,8 @@
+{
+  "type": "message",
+  "sender": "team-lead",
+  "recipient": "worker-1",
+  "content": "Please review the authentication module",
+  "timestamp": 1706000100000,
+  "summary": "Review auth module"
+}

@@ -1,0 +1,31 @@
+[
+  {
+    "id": "1",
+    "subject": "Implement JWT-based authentication for the API",
+    "owner": "worker-1",
+    "status": "in_progress",
+    "blockedBy": [],
+    "blocks": ["2"],
+    "activeForm": "Implementing authentication",
+    "createdAt": 1706000000000
+  },
+  {
+    "id": "2",
+    "subject": "Write unit tests for the authentication module",
+    "owner": "worker-2",
+    "status": "pending",
+    "blockedBy": ["1"],
+    "blocks": [],
+    "createdAt": 1706000001000
+  },
+  {
+    "id": "3",
+    "subject": "Deploy the latest build to staging environment",
+    "owner": "",
+    "status": "completed",
+    "blockedBy": [],
+    "blocks": [],
+    "createdAt": 1706000002000,
+    "completedAt": 1706000500000
+  }
+]

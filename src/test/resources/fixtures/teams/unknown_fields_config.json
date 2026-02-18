@@ -1,0 +1,19 @@
+{
+  "name": "future-team",
+  "description": "Config with unknown fields from a future version",
+  "leadAgentId": "lead@future",
+  "createdAt": 1706000000000,
+  "unknownField1": "some value",
+  "unknownField2": 42,
+  "members": [
+    {
+      "agentId": "lead@future",
+      "name": "team-lead",
+      "agentType": "team-lead",
+      "joinedAt": 1706000000000,
+      "backendType": "in-process",
+      "futureCapability": true,
+      "extraData": {"nested": "object"}
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "test-team",
+  "description": "Test team for unit tests",
+  "leadAgentId": "lead@test-team",
+  "createdAt": 1706000000000,
+  "members": [
+    {
+      "agentId": "lead@test-team",
+      "name": "team-lead",
+      "agentType": "team-lead",
+      "color": "#4A90D9",
+      "joinedAt": 1706000000000,
+      "backendType": "in-process"
+    },
+    {
+      "agentId": "worker-1@test-team",
+      "name": "worker-1",
+      "agentType": "Security Reviewer",
+      "model": "sonnet",
+      "color": "#D94A4A",
+      "planModeRequired": false,
+      "joinedAt": 1706000001000,
+      "cwd": "/tmp/test-project",
+      "backendType": "in-process"
+    }
+  ]
+}

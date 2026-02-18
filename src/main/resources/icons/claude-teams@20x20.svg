@@ -1,0 +1,14 @@
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Primary figure (team lead) -->
+  <circle cx="10" cy="5" r="2.8" fill="#D97757"/>
+  <path d="M5.5 13C5.5 10.8 7.51 9 10 9C12.49 9 14.5 10.8 14.5 13V13.75H5.5V13Z" fill="#D97757"/>
+  <!-- Left teammate -->
+  <circle cx="4" cy="8.2" r="1.9" fill="#D97757" opacity="0.65"/>
+  <path d="M1 15.2C1 13.5 2.34 12 4 12C5.66 12 7 13.5 7 15.2V15.8H1V15.2Z" fill="#D97757" opacity="0.65"/>
+  <!-- Right teammate -->
+  <circle cx="16" cy="8.2" r="1.9" fill="#D97757" opacity="0.65"/>
+  <path d="M13 15.2C13 13.5 14.34 12 16 12C17.66 12 19 13.5 19 15.2V15.8H13V15.2Z" fill="#D97757" opacity="0.65"/>
+  <!-- Connection lines -->
+  <line x1="7" y1="10" x2="4.8" y2="9.3" stroke="#D97757" stroke-width="0.6" opacity="0.4"/>
+  <line x1="13" y1="10" x2="15.2" y2="9.3" stroke="#D97757" stroke-width="0.6" opacity="0.4"/>
+</svg>
