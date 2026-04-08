@@ -10,6 +10,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.IconLoader
+import com.intellij.openapi.util.Key
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
@@ -41,6 +42,20 @@ data class TerminalTabContext(
 object TerminalHelper {
 
     private val logger = Logger.getInstance(TerminalHelper::class.java)
+
+    /**
+     * Key to mark terminal tabs as team-managed.
+     * V1.0 services check this via [isTeamTab] to avoid interfering with team tabs.
+     * V2.0 services set this via Content.putUserData().
+     */
+    val TEAM_TAB_KEY = Key.create<String>("ClaudeTeams.TeamTab")
+
+    /**
+     * Checks if a terminal tab Content is managed by the team system.
+     */
+    fun isTeamTab(content: Content): Boolean {
+        return content.getUserData(TEAM_TAB_KEY) != null
+    }
 
     /**
      * Gets the terminal context from the action event.

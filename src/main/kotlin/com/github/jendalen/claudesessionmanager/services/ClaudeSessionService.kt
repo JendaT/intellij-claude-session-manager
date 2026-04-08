@@ -25,15 +25,12 @@ class ClaudeSessionService(private val project: Project) {
         isLenient = true
     }
 
-    // Cached sessions index, invalidated on file changes
-    // Using a data class for atomic cache state to prevent race conditions
-    private data class CacheState(
+    // Multi-slot cache: keyed by absolute file path, each with its own mtime
+    private data class CacheEntry(
         val index: SessionsIndex?,
-        val path: String?,
         val mtime: Long
     )
-    @Volatile
-    private var cacheState = CacheState(null, null, 0)
+    private val indexCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
 
     /**
      * Returns the project's base path.
@@ -77,24 +74,59 @@ class ClaudeSessionService(private val project: Project) {
     fun getAllProjectSessions(): List<ClaudeSession> = getSessions()
 
     /**
-     * Finds a session by its ID.
+     * Finds a session by its ID in the current project's sessions-index.json.
      */
     fun findSessionById(sessionId: String): ClaudeSession? {
-        return getSessions().find { it.sessionId == sessionId }
+        return getSessions().find { it.sessionId.equals(sessionId, ignoreCase = true) }
     }
 
     /**
-     * Checks if a session with the given ID exists.
+     * Finds a session by its ID, searching ALL known sessions-index.json files.
+     * Use this when the session may have been created from a different cwd
+     * than the current IDE project (e.g., parent dir, monorepo root).
+     */
+    fun findSessionByIdGlobal(sessionId: String): ClaudeSession? {
+        // Try current project first (fastest path)
+        findSessionById(sessionId)?.let { return it }
+
+        // Search all discovered sessions-index.json files
+        val allFiles = ClaudePathResolver.findAllSessionsIndexFiles()
+        logger.info("Global search for session $sessionId across ${allFiles.size} index files")
+        for (indexFile in allFiles) {
+            val index = readSessionsIndex(indexFile)
+            if (index == null) {
+                logger.info("  Skipping ${indexFile.parentFile.name}: parse failed or missing")
+                continue
+            }
+            val match = index.entries.find { it.sessionId.equals(sessionId, ignoreCase = true) }
+            if (match != null) {
+                logger.info("Found session $sessionId in ${indexFile.parentFile.name} (not current project)")
+                return match
+            }
+        }
+        logger.info("Session $sessionId not found in any of ${allFiles.size} index files")
+        return null
+    }
+
+    /**
+     * Checks if a session with the given ID exists using multi-tier lookup:
+     * 1. Current project's sessions-index.json (fast)
+     * 2. Global search across all sessions-index.json files
+     * 3. JSONL file existence check (ground truth, independent of index)
      */
     fun sessionExists(sessionId: String): Boolean {
-        return findSessionById(sessionId) != null
+        // findSessionByIdGlobal already checks current project first, then all indexes
+        if (findSessionByIdGlobal(sessionId) != null) return true
+        // Fall back to JSONL file existence (ground truth, independent of any index)
+        return ClaudePathResolver.sessionFileExists(sessionId)
     }
 
     /**
      * Forces a reload of the sessions index from disk.
      */
     fun invalidateCache() {
-        cacheState = CacheState(null, null, 0)
+        indexCache.clear()
+        ClaudePathResolver.invalidateIndexFilesCache()
     }
 
     /**
@@ -109,23 +141,20 @@ class ClaudeSessionService(private val project: Project) {
         val currentMtime = file.lastModified()
         val currentPath = file.absolutePath
 
-        // Return cached if still valid (atomic read of cache state)
-        val currentCache = cacheState
-        if (currentCache.index != null &&
-            currentCache.path == currentPath &&
-            currentCache.mtime == currentMtime) {
-            return currentCache.index
+        // Return cached if still valid (per-file cache slot)
+        val cached = indexCache[currentPath]
+        if (cached != null && cached.mtime == currentMtime && cached.index != null) {
+            return cached.index
         }
 
         return try {
             val content = file.readText()
             val index = json.decodeFromString<SessionsIndex>(content)
-            // Atomic update of cache state
-            cacheState = CacheState(index, currentPath, currentMtime)
+            indexCache[currentPath] = CacheEntry(index, currentMtime)
             logger.debug("Loaded sessions index: ${index.entries.size} entries")
             index
         } catch (e: Exception) {
-            logger.warn("Failed to parse sessions-index.json: ${e.message}", e)
+            logger.warn("Failed to parse ${file.absolutePath}: ${e.message}", e)
             null
         }
     }

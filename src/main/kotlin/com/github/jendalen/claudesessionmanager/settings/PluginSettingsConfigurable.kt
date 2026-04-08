@@ -2,6 +2,7 @@ package com.github.jendalen.claudesessionmanager.settings
 
 import com.github.jendalen.claudesessionmanager.model.PluginSettings
 import com.github.jendalen.claudesessionmanager.services.ClaudeHookManager
+import com.github.jendalen.claudesessionmanager.services.OptionAsMetaKeyGuardService
 import com.github.jendalen.claudesessionmanager.services.SettingsService
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.intellij.icons.AllIcons
@@ -34,6 +35,7 @@ class PluginSettingsConfigurable : Configurable {
     private var notifyOnAutoDetection = settingsService.getSettings().notifyOnAutoDetection
     private var syncTabNames = settingsService.syncTabNames
     private var customClaudeHomePath = settingsService.customClaudeHomePath ?: ""
+    private var forceOptionAsMetaKeyOff = settingsService.forceOptionAsMetaKeyOff
 
     // Integration UI components (need to be refreshed)
     private var statusLabel: JBLabel? = null
@@ -109,6 +111,14 @@ class PluginSettingsConfigurable : Configurable {
                 row {
                     checkBox("Sync Claude /rename to terminal tab name")
                         .bindSelected(::syncTabNames)
+                }
+            }
+
+            group("Terminal Workarounds") {
+                row {
+                    checkBox("Keep \"Use Option as Meta Key\" off")
+                        .bindSelected(::forceOptionAsMetaKeyOff)
+                        .comment("Reverts the setting when Claude Code enables it (macOS only)")
                 }
             }
 
@@ -254,17 +264,25 @@ class PluginSettingsConfigurable : Configurable {
     }
 
     override fun isModified(): Boolean {
-        val settings = settingsService.getSettings()
-        return claudeCommand != settings.claudeCommand ||
-               autoResumeEnabled != settings.autoResumeEnabled ||
-               autoResumeDelayMs != settings.autoResumeDelayMs.toString() ||
-               notifyOnSessionChange != settings.notifyOnSessionChange ||
-               notifyOnAutoDetection != settings.notifyOnAutoDetection ||
-               syncTabNames != settings.syncTabNames ||
-               customClaudeHomePath != (settings.customClaudeHomePath ?: "")
+        // Let the panel check if UI values differ from the bound properties,
+        // then compare the bound properties against stored settings.
+        return panel?.isModified() == true || run {
+            val settings = settingsService.getSettings()
+            claudeCommand != settings.claudeCommand ||
+                autoResumeEnabled != settings.autoResumeEnabled ||
+                autoResumeDelayMs != settings.autoResumeDelayMs.toString() ||
+                notifyOnSessionChange != settings.notifyOnSessionChange ||
+                notifyOnAutoDetection != settings.notifyOnAutoDetection ||
+                syncTabNames != settings.syncTabNames ||
+                customClaudeHomePath != (settings.customClaudeHomePath ?: "") ||
+                forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff
+        }
     }
 
     override fun apply() {
+        // Transfer UI values to bound properties first
+        panel?.apply()
+
         val delayMs = autoResumeDelayMs.toLongOrNull() ?: PluginSettings.DEFAULT.autoResumeDelayMs
 
         settingsService.updateSettings(
@@ -275,9 +293,13 @@ class PluginSettingsConfigurable : Configurable {
                 notifyOnSessionChange = notifyOnSessionChange,
                 notifyOnAutoDetection = notifyOnAutoDetection,
                 syncTabNames = syncTabNames,
-                customClaudeHomePath = customClaudeHomePath.ifBlank { null }
+                customClaudeHomePath = customClaudeHomePath.ifBlank { null },
+                forceOptionAsMetaKeyOff = forceOptionAsMetaKeyOff
             )
         )
+
+        // Notify the guard service so it can act immediately if just enabled
+        OptionAsMetaKeyGuardService.getInstance().onGuardSettingChanged(forceOptionAsMetaKeyOff)
     }
 
     override fun reset() {
@@ -289,6 +311,7 @@ class PluginSettingsConfigurable : Configurable {
         notifyOnAutoDetection = settings.notifyOnAutoDetection
         syncTabNames = settings.syncTabNames
         customClaudeHomePath = settings.customClaudeHomePath ?: ""
+        forceOptionAsMetaKeyOff = settings.forceOptionAsMetaKeyOff
         panel?.reset()
         refreshIntegrationStatus()
     }

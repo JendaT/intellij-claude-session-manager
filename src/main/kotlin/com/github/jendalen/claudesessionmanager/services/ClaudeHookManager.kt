@@ -61,7 +61,8 @@ class ClaudeHookManager {
         |  mkdir -p "${'$'}EVENTS_DIR"
         |
         |  # Write current session for plugin to detect
-        |  echo "{\"timestamp\":${'$'}TIMESTAMP,\"sessionId\":\"${'$'}SESSION_ID\",\"source\":\"${'$'}SOURCE\",\"cwd\":\"${'$'}CWD\"}" > "${'$'}EVENTS_DIR/current-session.json"
+        |  jq -n --arg ts "${'$'}TIMESTAMP" --arg sid "${'$'}SESSION_ID" --arg src "${'$'}SOURCE" --arg cwd "${'$'}CWD" \
+        |    '{"timestamp":(${'$'}ts|tonumber),"sessionId":${'$'}sid,"source":${'$'}src,"cwd":${'$'}cwd}' > "${'$'}EVENTS_DIR/current-session.json"
         |fi
         |
         |exit 0

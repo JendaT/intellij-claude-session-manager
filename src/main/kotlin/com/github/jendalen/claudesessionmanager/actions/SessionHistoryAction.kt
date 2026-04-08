@@ -2,7 +2,6 @@ package com.github.jendalen.claudesessionmanager.actions
 
 import com.github.jendalen.claudesessionmanager.model.SessionHistoryEntry
 import com.github.jendalen.claudesessionmanager.services.BindingService
-import com.github.jendalen.claudesessionmanager.services.ClaudeSessionService
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
@@ -114,18 +113,8 @@ class SessionHistoryAction : ActionGroup() {
                 return
             }
 
-            // Check if session still exists
-            val sessionService = ClaudeSessionService.getInstance(project)
-            if (!sessionService.sessionExists(historyEntry.sessionId)) {
-                showNotification(
-                    project,
-                    "This session no longer exists",
-                    NotificationType.WARNING
-                )
-                return
-            }
-
             // Swap: current becomes history, history becomes current
+            // Claude CLI handles invalid IDs gracefully with an error in terminal
             bindingService.updateBindingSession(bindingId, historyEntry.sessionId)
 
             // Resume the session using context

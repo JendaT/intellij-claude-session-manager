@@ -2,6 +2,7 @@ package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
+import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -43,6 +44,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     companion object {
         private const val MAX_BUFFER_SIZE = 10000
         private const val BUFFER_TRIM_SIZE = 5000
+        private const val UUID_OVERLAP_SIZE = 35  // UUID is 36 chars; keep 35 for boundary spanning
+        private const val MAX_PENDING_VERIFICATIONS = 5
         private const val RECENT_SESSION_THRESHOLD_MS = 30000L
         private const val SESSION_VERIFICATION_DELAY_MS = 1500L
         private const val LOG_TRUNCATE_LENGTH = 100
@@ -197,24 +200,30 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
     /**
      * Processes terminal output looking for session IDs.
+     * Only scans new text (plus a small overlap for UUIDs spanning chunk boundaries).
      */
     private fun processTerminalOutput(tabMonitor: TabMonitor, text: String) {
         if (text.isBlank()) return
 
         val tabName = tabMonitor.tabName
 
-        // Accumulate text in buffer for multi-chunk detection
-        tabMonitor.textBuffer.append(text)
+        // Build the scan region: overlap from previous buffer tail + new text.
+        // A UUID is 36 chars, so keep 35 chars of overlap for boundary spanning.
+        val overlap = if (tabMonitor.textBuffer.length > UUID_OVERLAP_SIZE) {
+            tabMonitor.textBuffer.substring(tabMonitor.textBuffer.length - UUID_OVERLAP_SIZE)
+        } else {
+            tabMonitor.textBuffer.toString()
+        }
+        val scanRegion = overlap + text
 
-        // Limit buffer size to prevent memory issues
+        // Update the buffer (keep only recent tail for next overlap)
+        tabMonitor.textBuffer.append(text)
         if (tabMonitor.textBuffer.length > MAX_BUFFER_SIZE) {
             tabMonitor.textBuffer.delete(0, tabMonitor.textBuffer.length - BUFFER_TRIM_SIZE)
         }
 
-        val bufferText = tabMonitor.textBuffer.toString()
-
-        // Find ALL UUIDs in the buffer
-        val uuidMatcher = sessionIdPattern.matcher(bufferText)
+        // Scan only the new region for UUIDs
+        val uuidMatcher = sessionIdPattern.matcher(scanRegion)
         val foundUuids = mutableSetOf<String>()
 
         while (uuidMatcher.find()) {
@@ -239,8 +248,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 val now = System.currentTimeMillis()
                 val isRecentSession = (now - matchingSession.fileMtime) < RECENT_SESSION_THRESHOLD_MS
 
-                if (isRecentSession || foundUuids.size == 1) {
-                    logger.info("Found valid session ID in terminal '$tabName': $uuid (recent=$isRecentSession)")
+                if (isRecentSession) {
+                    logger.info("Found valid session ID in terminal '$tabName': $uuid (recent=true)")
                     handleDetectedSessionId(tabMonitor, uuid)
 
                     // Clear buffer after successful detection
@@ -265,6 +274,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
     /**
      * Handles a detected session ID - creates or updates binding.
+     * Binds immediately without requiring sessions-index.json verification,
+     * matching the approach used by ClaudeHookEventService.
      */
     private fun handleDetectedSessionId(tabMonitor: TabMonitor, sessionId: String) {
         val tabName = tabMonitor.tabName
@@ -277,50 +288,72 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         }
         tabMonitor.lastDetectedSessionId = sessionId
 
-        // Verify this session exists in Claude's sessions-index.json
+        // Try to find session metadata for richer notifications, but don't block on it
         val sessionService = ClaudeSessionService.getInstance(project)
-        val session = sessionService.getSessions().find { it.sessionId.equals(sessionId, ignoreCase = true) }
+        val session = sessionService.findSessionByIdGlobal(sessionId)
 
+        // Bind immediately - the detected UUID is authoritative
+        updateBindingForSession(tabMonitor, sessionId, session)
+
+        // If session wasn't in index, log when it appears
         if (session == null) {
-            logger.debug("Session $sessionId not found in sessions-index.json, may be creating...")
-            // Session might not be in index yet - schedule a delayed recheck
-            scheduleSessionVerification(tabMonitor, sessionId)
-            return
+            logger.info("Session $sessionId not yet in index (binding created anyway)")
+            scope.launch {
+                kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
+                sessionService.invalidateCache()
+                val found = sessionService.findSessionByIdGlobal(sessionId)
+                if (found != null) {
+                    logger.info("Session $sessionId appeared in index after delay")
+                } else {
+                    logger.debug("Session $sessionId still not in index after delay")
+                }
+            }
         }
-
-        // Session exists - create or update binding (use the original case from session)
-        updateBindingForSession(tabMonitor, session.sessionId, session)
     }
 
     /**
-     * Schedules a delayed verification of a session ID.
+     * Schedules a delayed verification and binding of a potential session ID.
+     * Unlike handleDetectedSessionId (which binds immediately for confirmed UUIDs),
+     * this waits briefly for the session to appear in the index before binding,
+     * since these are UUIDs found in terminal output that may not be session IDs at all.
      */
     private fun scheduleSessionVerification(tabMonitor: TabMonitor, sessionId: String) {
+        if (tabMonitor.pendingVerifications.size >= MAX_PENDING_VERIFICATIONS) return // too many pending
+        if (!tabMonitor.pendingVerifications.add(sessionId)) return // already pending
+
         scope.launch {
-            // Wait for session to be written to index
-            kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
+            try {
+                kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
 
-            val sessionService = ClaudeSessionService.getInstance(project)
-            sessionService.invalidateCache()
-            val session = sessionService.getSessions().find { it.sessionId.equals(sessionId, ignoreCase = true) }
+                val sessionService = ClaudeSessionService.getInstance(project)
+                sessionService.invalidateCache()
+                val session = sessionService.findSessionByIdGlobal(sessionId)
 
-            if (session != null) {
-                // Update lastDetectedSessionId to prevent reprocessing
-                tabMonitor.lastDetectedSessionId = session.sessionId.lowercase()
-                updateBindingForSession(tabMonitor, session.sessionId, session)
-            } else {
-                logger.debug("Session $sessionId still not found after delay")
+                if (session != null) {
+                    tabMonitor.lastDetectedSessionId = session.sessionId.lowercase()
+                    updateBindingForSession(tabMonitor, session.sessionId, session)
+                } else if (ClaudePathResolver.sessionFileExists(sessionId)) {
+                    // Session file exists but not in any index - still bind
+                    tabMonitor.lastDetectedSessionId = sessionId.lowercase()
+                    updateBindingForSession(tabMonitor, sessionId, null)
+                    logger.info("Bound session $sessionId found via JSONL file (not in any index)")
+                } else {
+                    logger.debug("UUID $sessionId is not a known Claude session")
+                }
+            } finally {
+                tabMonitor.pendingVerifications.remove(sessionId)
             }
         }
     }
 
     /**
      * Updates or creates a binding for the detected session.
+     * Session metadata is optional - binding works with just the session ID.
      */
     private fun updateBindingForSession(
         tabMonitor: TabMonitor,
         sessionId: String,
-        session: com.github.jendalen.claudesessionmanager.model.ClaudeSession
+        session: com.github.jendalen.claudesessionmanager.model.ClaudeSession?
     ) {
         val tabName = tabMonitor.tabName
         val bindingService = BindingService.getInstance(project)
@@ -334,9 +367,13 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         )
 
         val existingBinding = bindingService.findBindingForTab(tabIdentifier)
+        val displayInfo = session?.displaySummary() ?: "${sessionId.take(8)}..."
 
         ApplicationManager.getApplication().invokeLater {
             val content = tabMonitor.tab.content
+
+            // Skip team-managed tabs - v2.0 handles their binding
+            if (TerminalHelper.isTeamTab(content)) return@invokeLater
 
             if (existingBinding != null) {
                 // Update existing binding if session changed
@@ -348,7 +385,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                     if (settings.notifyOnSessionChange) {
                         showNotification(
                             "Session changed in '$tabName'",
-                            "Updated to: ${session.displaySummary()}",
+                            "Updated to: $displayInfo",
                             NotificationType.INFORMATION
                         )
                     }
@@ -361,11 +398,14 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 // Set Claude icon
                 TerminalHelper.setClaudeIconOnContent(content)
 
-                showNotification(
-                    "Claude session detected",
-                    "Auto-bound '$tabName' to: ${session.displaySummary()}",
-                    NotificationType.INFORMATION
-                )
+                val settings = SettingsService.getInstance()
+                if (settings.notifyOnAutoDetection) {
+                    showNotification(
+                        "Claude session detected",
+                        "Auto-bound '$tabName' to: $displayInfo",
+                        NotificationType.INFORMATION
+                    )
+                }
             }
         }
     }
@@ -389,9 +429,10 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
         logger.info("Terminal tab renamed: '$oldName' -> '$newName'")
 
-        // Update the monitoredTabs map
+        // Update the monitoredTabs map and the monitor's own name
         val monitor = monitoredTabs.remove(oldName)
         if (monitor != null) {
+            monitor.tabName = newName
             monitoredTabs[newName] = monitor
         }
 
@@ -446,10 +487,11 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
      * Class to track monitoring state for a tab.
      */
     private class TabMonitor(
-        val tabName: String,
+        @Volatile var tabName: String,
         val tab: TerminalToolWindowTab,
         val disposable: Disposable,
         var lastDetectedSessionId: String? = null,
-        val textBuffer: StringBuilder = StringBuilder()
+        val textBuffer: StringBuilder = StringBuilder(),
+        val pendingVerifications: MutableSet<String> = ConcurrentHashMap.newKeySet()
     )
 }

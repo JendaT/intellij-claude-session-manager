@@ -12,7 +12,6 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.IconLoader
-import com.intellij.openapi.util.Key
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.content.Content
 import com.intellij.util.Alarm
@@ -46,7 +45,7 @@ class AgentTeamsManager(private val project: Project) : TeamEventListener, Dispo
          * V1.0 services (AutoResumeService, SessionWatcherService, etc.)
          * should check this key and skip team tabs.
          */
-        val TEAM_TAB_KEY = Key.create<String>("ClaudeTeams.TeamTab")
+        val TEAM_TAB_KEY = TerminalHelper.TEAM_TAB_KEY
 
         private val teamsIcon by lazy {
             try {
@@ -65,7 +64,7 @@ class AgentTeamsManager(private val project: Project) : TeamEventListener, Dispo
          * V1.0 services should call this to avoid interfering with team tabs.
          */
         fun isTeamTab(content: Content): Boolean {
-            return content.getUserData(TEAM_TAB_KEY) != null
+            return TerminalHelper.isTeamTab(content)
         }
     }
 

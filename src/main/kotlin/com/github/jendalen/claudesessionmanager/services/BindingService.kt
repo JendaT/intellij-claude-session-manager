@@ -4,7 +4,9 @@ import com.github.jendalen.claudesessionmanager.model.SessionBinding
 import com.github.jendalen.claudesessionmanager.model.SessionHistoryEntry
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.util.SessionIdValidator
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.util.Alarm
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
@@ -29,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 class BindingService(private val project: Project) : PersistentStateComponent<BindingService.BindingsState> {
 
     private val logger = Logger.getInstance(BindingService::class.java)
+    private val saveAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD)
 
     /**
      * Serializable state for XML persistence.
@@ -233,10 +236,16 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
     }
 
     /**
-     * Synchronizes in-memory cache to persistent state.
+     * Synchronizes in-memory cache to persistent state and triggers save.
      */
     private fun syncToState() {
         state.bindings = bindingsCache.values.map { bindingToEntry(it) }.toMutableList()
+        // Debounced flush to disk to prevent binding loss on IDE crash
+        // without causing N saves during multi-tab auto-resume
+        saveAlarm.cancelAllRequests()
+        saveAlarm.addRequest({
+            if (!project.isDisposed) project.save()
+        }, SAVE_DEBOUNCE_MS)
     }
 
     private fun bindingToEntry(binding: SessionBinding): BindingEntry {
@@ -285,6 +294,7 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
 
     companion object {
         private const val CURRENT_SCHEMA_VERSION = 1
+        private const val SAVE_DEBOUNCE_MS = 200
 
         fun getInstance(project: Project): BindingService {
             return project.getService(BindingService::class.java)

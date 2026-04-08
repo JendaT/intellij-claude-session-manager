@@ -13,7 +13,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
-import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
 import kotlinx.coroutines.delay
 
 /**
@@ -58,6 +57,14 @@ class AutoResumeService : ProjectActivity {
 
         logger.info("Found ${bindings.size} bindings to auto-resume")
 
+        // Activate suppression window on the hook event service BEFORE sending resume commands.
+        // This prevents hook events from flip-flopping bindings during multi-tab auto-resume.
+        try {
+            ClaudeHookEventService.getInstance(project).suppressForAutoResume()
+        } catch (e: Exception) {
+            logger.warn("Failed to set auto-resume suppression: ${e.message}")
+        }
+
         // Track results
         var resumedCount = 0
         val missingBindings = mutableListOf<SessionBinding>()
@@ -66,14 +73,6 @@ class AutoResumeService : ProjectActivity {
         // Resume each binding
         for (binding in bindings) {
             val tabName = binding.tabIdentifier.name
-
-            // Check if session still exists
-            val sessionService = ClaudeSessionService.getInstance(project)
-            if (!sessionService.sessionExists(binding.currentSessionId)) {
-                logger.warn("Session ${binding.currentSessionId} no longer exists for tab '$tabName'")
-                missingBindings.add(binding)
-                continue
-            }
 
             // Find terminal tab by name using TerminalToolWindowTabsManager
             val terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
@@ -212,14 +211,6 @@ class AutoResumeService : ProjectActivity {
             val tabName = binding.tabIdentifier.name
             try {
                 // Try to create a new terminal tab with the original name
-                val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
-                val tabBuilder = tabsManager.createTabBuilder()
-
-                // Create the tab - this returns a TerminalToolWindowTab
-                // Note: We can't easily set the name, so we'll rely on the session to set it
-                // For now, just create a generic tab and resume the session
-
-                // Alternative: Use the old API if available
                 val widget = TerminalHelper.createNewTerminalTab(project, tabName)
                 if (widget != null) {
                     // Delay to let terminal initialize using a self-disposing alarm

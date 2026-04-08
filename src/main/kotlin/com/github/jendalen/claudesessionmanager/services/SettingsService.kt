@@ -35,6 +35,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         var fileWatcherDebounceMs: Long = 500
         var maxHistoryPerBinding: Int = 20
         var orphanedHistoryRetentionDays: Int = 30
+        var forceOptionAsMetaKeyOff: Boolean = false
     }
 
     private var state = State()
@@ -58,7 +59,8 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         customClaudeHomePath = state.customClaudeHomePath,
         fileWatcherDebounceMs = state.fileWatcherDebounceMs,
         maxHistoryPerBinding = state.maxHistoryPerBinding,
-        orphanedHistoryRetentionDays = state.orphanedHistoryRetentionDays
+        orphanedHistoryRetentionDays = state.orphanedHistoryRetentionDays,
+        forceOptionAsMetaKeyOff = state.forceOptionAsMetaKeyOff
     ).validated()
 
     /**
@@ -76,6 +78,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         state.fileWatcherDebounceMs = validated.fileWatcherDebounceMs
         state.maxHistoryPerBinding = validated.maxHistoryPerBinding
         state.orphanedHistoryRetentionDays = validated.orphanedHistoryRetentionDays
+        state.forceOptionAsMetaKeyOff = validated.forceOptionAsMetaKeyOff
     }
 
     // Convenience accessors
@@ -109,6 +112,10 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
     var customClaudeHomePath: String?
         get() = state.customClaudeHomePath
         set(value) { state.customClaudeHomePath = value }
+
+    var forceOptionAsMetaKeyOff: Boolean
+        get() = state.forceOptionAsMetaKeyOff
+        set(value) { state.forceOptionAsMetaKeyOff = value }
 
     companion object {
         fun getInstance(): SettingsService {

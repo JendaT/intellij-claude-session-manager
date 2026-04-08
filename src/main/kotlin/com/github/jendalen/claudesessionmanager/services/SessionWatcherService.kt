@@ -1,6 +1,7 @@
 package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
+import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -31,6 +32,8 @@ class SessionWatcherService(private val project: Project) : Disposable {
     private var lastKnownSessions: Map<String, Long> = emptyMap() // sessionId -> modified timestamp
     @Volatile
     private var isWatching = false
+    @Volatile
+    private var watchingParentForCreation = false
     private var sessionsFilePath: Path? = null
 
     // File stability check constants
@@ -67,9 +70,27 @@ class SessionWatcherService(private val project: Project) : Disposable {
         refreshKnownSessions()
 
         try {
-            // Use native file system WatchService
             watchService = FileSystems.getDefault().newWatchService()
-            parentDir.register(
+
+            // Check if the project-specific directory exists yet
+            val parentDirFile = parentDir.toFile()
+            val dirToWatch: Path
+            if (parentDirFile.exists()) {
+                dirToWatch = parentDir
+                watchingParentForCreation = false
+            } else {
+                // Directory doesn't exist yet (first Claude session for this project).
+                // Watch the projects/ directory for the project dir to be created.
+                val projectsDir = ClaudePathResolver.getProjectsDirectory()
+                if (!projectsDir.exists()) {
+                    projectsDir.mkdirs()
+                }
+                dirToWatch = projectsDir.toPath()
+                watchingParentForCreation = true
+                logger.info("Project directory doesn't exist yet, watching ${projectsDir.absolutePath} for its creation")
+            }
+
+            dirToWatch.register(
                 watchService,
                 StandardWatchEventKinds.ENTRY_MODIFY,
                 StandardWatchEventKinds.ENTRY_CREATE
@@ -87,12 +108,37 @@ class SessionWatcherService(private val project: Project) : Disposable {
                                 if (kind == StandardWatchEventKinds.OVERFLOW) continue
 
                                 val filename = event.context() as? Path
-                                if (filename?.toString() == "sessions-index.json") {
-                                    logger.debug("Detected change in sessions-index.json")
-                                    scheduleReconciliation()
+
+                                if (watchingParentForCreation) {
+                                    // We're watching projects/ for the project dir to appear
+                                    val projectDirName = parentDir.fileName?.toString()
+                                    if (filename?.toString() == projectDirName && parentDirFile.isDirectory) {
+                                        logger.info("Project directory created, switching to direct watching")
+                                        // Cancel the parent key and register the actual directory
+                                        key.cancel()
+                                        try {
+                                            parentDir.register(
+                                                watchService,
+                                                StandardWatchEventKinds.ENTRY_MODIFY,
+                                                StandardWatchEventKinds.ENTRY_CREATE
+                                            )
+                                            watchingParentForCreation = false
+                                            // Initialize sessions now that the directory exists
+                                            refreshKnownSessions()
+                                        } catch (e: Exception) {
+                                            logger.warn("Failed to switch to project directory watching: ${e.message}", e)
+                                        }
+                                    }
+                                } else {
+                                    if (filename?.toString() == "sessions-index.json") {
+                                        logger.debug("Detected change in sessions-index.json")
+                                        scheduleReconciliation()
+                                    }
                                 }
                             }
-                            key.reset()
+                            if (key.isValid) {
+                                key.reset()
+                            }
                         }
                     }
                 } catch (e: InterruptedException) {
@@ -116,6 +162,7 @@ class SessionWatcherService(private val project: Project) : Disposable {
      */
     fun stopWatching() {
         isWatching = false
+        watchingParentForCreation = false
         watchThread?.interrupt()
         watchThread = null
         try {
@@ -213,7 +260,7 @@ class SessionWatcherService(private val project: Project) : Disposable {
         for (binding in bindings) {
             val boundSessionId = binding.currentSessionId
             if (boundSessionId !in currentSessionsMap) {
-                handleMissingSession(binding.id, binding.tabIdentifier.name, boundSessionId, currentSessions)
+                handleMissingSession(binding.tabIdentifier.name, boundSessionId)
             }
         }
 
@@ -240,10 +287,15 @@ class SessionWatcherService(private val project: Project) : Disposable {
         ApplicationManager.getApplication().invokeLater {
             try {
                 val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return@invokeLater
-                if (!toolWindow.isVisible) return@invokeLater
+                // NOTE: Do NOT check toolWindow.isVisible here.
+                // The terminal might not be the active tool window but selectedContent
+                // is still valid from the user's last interaction.
 
                 val contentManager = toolWindow.contentManager
                 val selectedContent = contentManager.selectedContent ?: return@invokeLater
+
+                // Skip team-managed tabs - v2.0 handles their binding
+                if (TerminalHelper.isTeamTab(selectedContent)) return@invokeLater
 
                 val tabName = selectedContent.displayName ?: return@invokeLater
 
@@ -293,45 +345,17 @@ class SessionWatcherService(private val project: Project) : Disposable {
     }
 
     /**
-     * Handles a binding whose session no longer exists.
+     * Handles a binding whose session no longer exists in sessions-index.json.
+     * NOTE: We do NOT auto-rebind to the "most recent" session - that causes
+     * cross-tab contamination where unrelated sessions overwrite correct bindings.
+     * The binding is left as-is; the hook event service will update it when
+     * the session actually changes.
      */
-    private fun handleMissingSession(
-        bindingId: String,
-        tabName: String,
-        oldSessionId: String,
-        currentSessions: List<com.github.jendalen.claudesessionmanager.model.ClaudeSession>
-    ) {
-        logger.info("Session $oldSessionId for tab '$tabName' no longer exists")
-
-        val settings = SettingsService.getInstance()
-
-        // Find the most recent session as a candidate for auto-rebinding
-        val mostRecentSession = currentSessions.maxByOrNull { it.modifiedInstant() }
-
-        if (mostRecentSession != null) {
-            // Auto-update binding to the newest session
-            val bindingService = BindingService.getInstance(project)
-            bindingService.updateBindingSession(bindingId, mostRecentSession.sessionId)
-
-            if (settings.notifyOnSessionChange) {
-                showNotification(
-                    "Session changed in '$tabName'",
-                    "Bound to new session: ${mostRecentSession.displaySummary()}",
-                    NotificationType.INFORMATION
-                )
-            }
-
-            logger.info("Updated binding for '$tabName' from $oldSessionId to ${mostRecentSession.sessionId}")
-        } else {
-            // No sessions available - leave binding stale
-            if (settings.notifyOnSessionChange) {
-                showNotification(
-                    "Session missing in '$tabName'",
-                    "The bound session no longer exists. Consider rebinding.",
-                    NotificationType.WARNING
-                )
-            }
-        }
+    private fun handleMissingSession(tabName: String, oldSessionId: String) {
+        // Many sessions are never written to sessions-index.json (e.g., after /clear).
+        // A "missing" session in the index doesn't mean the binding is wrong.
+        // Just log it - the hook service handles actual session changes.
+        logger.info("Session $oldSessionId for tab '$tabName' not in sessions-index.json (binding preserved)")
     }
 
     /**

@@ -58,7 +58,14 @@ data class PluginSettings(
     /**
      * Days to keep orphaned history entries before cleanup.
      */
-    val orphanedHistoryRetentionDays: Int = 30
+    val orphanedHistoryRetentionDays: Int = 30,
+
+    /**
+     * Whether to force "Use Option as Meta Key" off in terminal settings.
+     * Works around Claude Code repeatedly enabling this setting.
+     * macOS only - has no effect on other platforms.
+     */
+    val forceOptionAsMetaKeyOff: Boolean = false
 ) {
     companion object {
         private val logger = Logger.getInstance(PluginSettings::class.java)
@@ -99,7 +106,15 @@ data class PluginSettings(
             logger.warn("orphanedHistoryRetentionDays $orphanedHistoryRetentionDays out of range, corrected to $correctedRetention")
         }
 
+        val correctedCommand = if (claudeCommand.matches(Regex("[a-zA-Z0-9_./ \\-]+"))) {
+            claudeCommand
+        } else {
+            logger.warn("claudeCommand contains invalid characters, falling back to default")
+            "claude"
+        }
+
         return copy(
+            claudeCommand = correctedCommand,
             autoResumeDelayMs = correctedDelay,
             fileWatcherDebounceMs = correctedDebounce,
             maxHistoryPerBinding = correctedHistory,

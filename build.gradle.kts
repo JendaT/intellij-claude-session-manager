@@ -1,7 +1,7 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.0"
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0"
+    id("org.jetbrains.kotlin.jvm") version "2.3.0"
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.3.0"
     id("org.jetbrains.intellij.platform") version "2.11.0"
 }
 
@@ -17,11 +17,14 @@ repositories {
 
 dependencies {
     // Kotlin serialization for JSON parsing
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
 
     // IntelliJ Platform - use local WebStorm installation
     intellijPlatform {
-        local("/Users/jendalen/Applications/WebStorm.app")
+        // Compile against a local JetBrains IDE installation.
+        // The plugin runs in all JetBrains IDEs (WebStorm, PyCharm, IDEA, CLion, PHPStorm).
+        // Override via: ./gradlew build -PlocalIdePath=/path/to/IDE.app
+        local(providers.gradleProperty("localIdePath").getOrElse("/Users/jendalen/Applications/WebStorm.app"))
 
         // Terminal plugin dependency
         bundledPlugin("org.jetbrains.plugins.terminal")
@@ -50,7 +53,7 @@ intellijPlatform {
         }
 
         vendor {
-            name = "Jan Dalen"
+            name = "Jenda Tresnak"
             url = "https://github.com/jendalen"
         }
     }

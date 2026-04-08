@@ -18,6 +18,13 @@ import java.io.File
  */
 object ClaudePathResolver {
 
+    // TTL cache for findAllSessionsIndexFiles() - directory listing changes rarely
+    @Volatile
+    private var cachedIndexFiles: List<File> = emptyList()
+    @Volatile
+    private var cachedIndexFilesTimestamp: Long = 0
+    private const val INDEX_FILES_CACHE_TTL_MS = 30_000L
+
     private val logger = Logger.getInstance(ClaudePathResolver::class.java)
 
     /**
@@ -30,8 +37,11 @@ object ClaudePathResolver {
         return if (!envHome.isNullOrBlank()) {
             val file = File(envHome)
             // SECURITY: Validate the path to prevent traversal attacks
-            validatePath(file, "CLAUDE_HOME")
-            file
+            if (validatePath(file, "CLAUDE_HOME")) file
+            else {
+                logger.warn("Falling back to default Claude home due to suspicious CLAUDE_HOME")
+                File(System.getProperty("user.home"), ".claude")
+            }
         } else {
             File(System.getProperty("user.home"), ".claude")
         }
@@ -41,22 +51,27 @@ object ClaudePathResolver {
      * Validates a path to prevent path traversal attacks.
      * Logs a warning if the path appears suspicious.
      */
-    private fun validatePath(file: File, source: String) {
+    private fun validatePath(file: File, source: String): Boolean {
         val canonicalPath = file.canonicalPath
         val absolutePath = file.absolutePath
 
         // Check for path traversal attempts
         if (absolutePath.contains("..") || canonicalPath != absolutePath.replace("//", "/")) {
-            logger.warn("Potential path traversal detected in $source: $absolutePath -> $canonicalPath")
+            logger.warn("Rejecting suspicious path in $source: $absolutePath -> $canonicalPath")
+            return false
         }
+        return true
     }
 
     /**
      * Encodes a project path to Claude's directory name format.
      * /Users/foo/project -> -Users-foo-project
+     *
+     * Claude CLI uses: path.replace(/[^a-zA-Z0-9]/g, "-")
+     * i.e., every non-alphanumeric character becomes a dash.
      */
     fun encodeProjectPath(projectPath: String): String {
-        return projectPath.replace("/", "-").replace("\\", "-")
+        return projectPath.replace(Regex("[^a-zA-Z0-9]"), "-")
     }
 
     /**
@@ -79,18 +94,34 @@ object ClaudePathResolver {
      * Useful for discovering all projects with Claude sessions.
      */
     fun findAllSessionsIndexFiles(): List<File> {
+        val now = System.currentTimeMillis()
+        if (now - cachedIndexFilesTimestamp < INDEX_FILES_CACHE_TTL_MS && cachedIndexFiles.isNotEmpty()) {
+            return cachedIndexFiles
+        }
+
         val projectsDir = getProjectsDirectory()
         if (!projectsDir.exists() || !projectsDir.isDirectory) {
             return emptyList()
         }
 
-        return projectsDir.listFiles()
+        val result = projectsDir.listFiles()
             ?.filter { it.isDirectory }
             ?.mapNotNull { projectDir ->
                 val indexFile = File(projectDir, "sessions-index.json")
                 if (indexFile.exists() && indexFile.isFile) indexFile else null
             }
             ?: emptyList()
+
+        cachedIndexFiles = result
+        cachedIndexFilesTimestamp = now
+        return result
+    }
+
+    /**
+     * Invalidates the cached list of session index files.
+     */
+    fun invalidateIndexFilesCache() {
+        cachedIndexFilesTimestamp = 0
     }
 
     /**
@@ -107,6 +138,27 @@ object ClaudePathResolver {
         // IDE path is parent of session path
         return normalizedSessionPath.startsWith("$normalizedIdePath/") ||
                normalizedSessionPath.startsWith("$normalizedIdePath\\")
+    }
+
+    /**
+     * Checks if a session's JSONL file exists in any project directory.
+     * This is the ground truth for session existence - independent of sessions-index.json.
+     */
+    fun sessionFileExists(sessionId: String): Boolean {
+        // Validate UUID format to prevent path traversal
+        if (!sessionId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
+            logger.warn("Invalid session ID format for file check: $sessionId")
+            return false
+        }
+
+        val projectsDir = getProjectsDirectory()
+        if (!projectsDir.exists() || !projectsDir.isDirectory) return false
+
+        val filename = "$sessionId.jsonl"
+        return projectsDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.any { projectDir -> File(projectDir, filename).exists() }
+            ?: false
     }
 
     /**

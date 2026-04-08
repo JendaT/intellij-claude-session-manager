@@ -15,16 +15,16 @@ import java.time.format.DateTimeParseException
  */
 @Serializable
 data class ClaudeSession(
-    val sessionId: String,
-    val fullPath: String,
-    val fileMtime: Long,
-    val firstPrompt: String,
-    val summary: String,
-    val messageCount: Int,
-    val created: String,  // ISO8601 timestamp
-    val modified: String, // ISO8601 timestamp
-    val gitBranch: String,
-    val projectPath: String,
+    val sessionId: String = "",
+    val fullPath: String = "",
+    val fileMtime: Long = 0,
+    val firstPrompt: String = "",
+    val summary: String = "",
+    val messageCount: Int = 0,
+    val created: String = "",  // ISO8601 timestamp
+    val modified: String = "", // ISO8601 timestamp
+    val gitBranch: String = "",
+    val projectPath: String = "",
     val isSidechain: Boolean = false
 ) {
     companion object {
@@ -62,7 +62,8 @@ data class ClaudeSession(
      * Returns a display-friendly summary, falling back to firstPrompt if summary is empty.
      */
     fun displaySummary(): String {
-        return summary.ifBlank { firstPrompt.take(50) + if (firstPrompt.length > 50) "..." else "" }
+        val text = summary.ifBlank { firstPrompt.take(50) + if (firstPrompt.length > 50) "..." else "" }
+        return text.ifBlank { "${sessionId.take(8)}..." }
     }
 }
 
@@ -71,7 +72,7 @@ data class ClaudeSession(
  */
 @Serializable
 data class SessionsIndex(
-    val version: Int,
-    val entries: List<ClaudeSession>,
-    val originalPath: String
+    val version: Int = 1,
+    val entries: List<ClaudeSession> = emptyList(),
+    val originalPath: String = ""
 )

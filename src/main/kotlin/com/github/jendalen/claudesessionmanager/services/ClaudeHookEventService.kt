@@ -46,13 +46,18 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     @Volatile
     private var lastProcessedTimestamp: Long = 0
 
+    // Suppression window: during auto-resume, don't update existing bindings
+    // (auto-resume already has the correct binding from persistence)
+    @Volatile
+    private var autoResumeSuppressUntil: Long = 0
+
     // Constants for retry delays
     companion object {
-        private val STARTUP_RETRY_DELAYS_MS = listOf(1000L, 2000L, 5000L, 10000L)
-        private const val EXISTING_SESSION_RETRY_DELAY_MS = 500L
+        private val RETRY_DELAYS_MS = listOf(1000L, 2000L, 5000L, 10000L)
         private const val FILE_WRITE_DELAY_MS = 50L
         private const val FILE_RECHECK_DELAY_MS = 200L
         private const val POLL_INTERVAL_SECONDS = 5
+        private const val AUTO_RESUME_SUPPRESS_BUFFER_MS = 15000L
 
         fun getInstance(project: Project): ClaudeHookEventService {
             return project.getService(ClaudeHookEventService::class.java)
@@ -61,10 +66,10 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
     @Serializable
     data class SessionEvent(
-        val timestamp: Long,
-        val sessionId: String,
-        val source: String,
-        val cwd: String
+        val timestamp: Long = 0,
+        val sessionId: String = "",
+        val source: String = "unknown",
+        val cwd: String = ""
     )
 
     /**
@@ -92,9 +97,9 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 StandardWatchEventKinds.ENTRY_CREATE
             )
 
+            isWatching = true
             watchThread = thread(start = true, isDaemon = true, name = "ClaudeHookEventWatcher") {
                 logger.info("Started Claude hook event watcher for ${eventsDir.absolutePath}")
-                isWatching = true
 
                 val eventFile = File(eventsDir, "current-session.json")
                 var pollCounter = 0
@@ -173,35 +178,27 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
             logger.info("Processing session event: sessionId=${event.sessionId}, source=${event.source}, cwd=${event.cwd}")
 
-            // Check if this event is for our project
-            // Be lenient: if there's already a binding for the focused terminal, update it
-            // regardless of cwd (user might be switching sessions via /resume)
+            // Check if this event is for our project (directory-boundary-aware)
             val projectPath = project.basePath
             val cwdMatchesProject = projectPath == null ||
                                     event.cwd.isEmpty() ||
-                                    event.cwd.startsWith(projectPath) ||
-                                    projectPath.startsWith(event.cwd)
+                                    isDirectoryMatch(event.cwd, projectPath)
 
             if (!cwdMatchesProject) {
-                // Check if there's an existing binding for the focused terminal that we should update
-                val hasExistingBinding = checkForExistingBinding()
-                if (!hasExistingBinding) {
-                    logger.debug("Session cwd ${event.cwd} is not in project $projectPath and no existing binding, skipping")
-                    return
-                }
-                logger.info("CWD doesn't match project but found existing binding, processing anyway")
+                logger.info("Hook event skipped: CWD '${event.cwd}' doesn't match project '$projectPath' (project=${project.name}, session=${event.sessionId}, source=${event.source})")
+                return
             }
 
-            // For 'startup' events, the session may not be in sessions-index.json yet
-            // Wait a bit and retry a few times
-            when (event.source) {
-                "startup" -> processStartupEvent(event)
-                "resume", "clear", "compact" -> processExistingSessionEvent(event)
-                else -> {
-                    logger.info("Unknown event source '${event.source}', treating as existing session event")
-                    processExistingSessionEvent(event)
-                }
-            }
+            // All event sources may involve a session ID not yet in the index:
+            // - startup: new session, not indexed until first interaction
+            // - resume: Claude may create a new session ID for the continuation
+            // - clear/compact: creates a new session, not indexed until first interaction
+            // Use startup-like retry logic for all sources.
+            bindSessionFromEvent(event)
+
+            // Trigger the "Option as Meta Key" guard - Claude often re-enables
+            // this setting during session startup. Check now + delayed recheck.
+            OptionAsMetaKeyGuardService.getInstance().onSessionChangeDetected()
 
         } catch (e: Exception) {
             logger.warn("Failed to process session event: ${e.message}", e)
@@ -209,130 +206,84 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     }
 
     /**
-     * Checks if there's an existing binding for the currently focused terminal tab.
+     * Processes a session event with immediate binding.
+     *
+     * Binds immediately using just the session ID from the hook event, without
+     * requiring sessions-index.json verification. Many sessions (especially after
+     * /clear, /compact) are never written to the index in time, or at all.
+     * The binding only needs the session ID - the ClaudeSession metadata is optional
+     * and only used for richer notification text.
      */
-    private fun checkForExistingBinding(): Boolean {
-        var hasBinding = false
-        // This is called from background thread, need to check on EDT
-        ApplicationManager.getApplication().invokeAndWait {
-            try {
-                val toolWindow = TerminalHelper.getTerminalToolWindow(project)
-                val content = toolWindow?.contentManager?.selectedContent
-                val tabName = content?.displayName
-
-                if (tabName != null) {
-                    val tabIdentifier = TabIdentifier(
-                        name = tabName,
-                        createdAt = System.currentTimeMillis(),
-                        shellPid = null,
-                        workingDirectory = null
-                    )
-                    val bindingService = BindingService.getInstance(project)
-                    hasBinding = bindingService.findBindingForTab(tabIdentifier) != null
-                }
-            } catch (e: Exception) {
-                logger.debug("Error checking for existing binding: ${e.message}")
-            }
-        }
-        return hasBinding
-    }
-
-    /**
-     * Processes a startup event with retry logic for session creation delay.
-     */
-    private fun processStartupEvent(event: SessionEvent) {
+    private fun bindSessionFromEvent(event: SessionEvent) {
         val sessionService = ClaudeSessionService.getInstance(project)
 
-        // Try immediately first
+        // Try to find session metadata for better notifications, but don't block on it
         sessionService.invalidateCache()
-        var session = sessionService.getSessions().find { it.sessionId.equals(event.sessionId, ignoreCase = true) }
+        val session = sessionService.findSessionByIdGlobal(event.sessionId)
 
-        if (session != null) {
-            bindToFocusedTerminal(event.sessionId, session, event.source)
-            return
-        }
+        // Bind immediately - the hook event is authoritative, no index verification needed
+        bindToFocusedTerminal(event.sessionId, session, event.source)
 
-        // For startup, session might not be created until first message
-        // Schedule retries with increasing delays using coroutines
-        logger.info("Session ${event.sessionId} not yet in index, scheduling retries for startup event")
-
-        scope.launch {
-            for ((index, delayMs) in STARTUP_RETRY_DELAYS_MS.withIndex()) {
-                delay(delayMs)
-                sessionService.invalidateCache()
-                val foundSession = sessionService.getSessions().find {
-                    it.sessionId.equals(event.sessionId, ignoreCase = true)
-                }
-
-                if (foundSession != null) {
-                    logger.info("Session ${event.sessionId} found after ${delayMs}ms delay")
-                    bindToFocusedTerminal(event.sessionId, foundSession, event.source)
-                    return@launch
-                } else {
-                    logger.debug("Session ${event.sessionId} still not found after ${delayMs}ms (attempt ${index + 1}/${STARTUP_RETRY_DELAYS_MS.size})")
-                }
-            }
-            logger.warn("Session ${event.sessionId} not found after all retries")
-        }
-    }
-
-    /**
-     * Processes events where session should already exist (resume, clear, compact).
-     */
-    private fun processExistingSessionEvent(event: SessionEvent) {
-        val sessionService = ClaudeSessionService.getInstance(project)
-        sessionService.invalidateCache()
-        val session = sessionService.getSessions().find { it.sessionId.equals(event.sessionId, ignoreCase = true) }
-
+        // If session wasn't in index, schedule background retries to log when it appears
         if (session == null) {
-            // For resume/clear/compact, session should exist - try once more after short delay
-            logger.debug("Session ${event.sessionId} not found for ${event.source} event, retrying once...")
+            logger.info("Session ${event.sessionId} not yet in index for ${event.source} event (binding created anyway)")
+
             scope.launch {
-                delay(EXISTING_SESSION_RETRY_DELAY_MS)
-                sessionService.invalidateCache()
-                val foundSession = sessionService.getSessions().find {
-                    it.sessionId.equals(event.sessionId, ignoreCase = true)
+                for ((index, delayMs) in RETRY_DELAYS_MS.withIndex()) {
+                    delay(delayMs)
+                    sessionService.invalidateCache()
+                    val foundSession = sessionService.findSessionByIdGlobal(event.sessionId)
+
+                    if (foundSession != null) {
+                        logger.info("Session ${event.sessionId} appeared in index on retry ${index + 1} (after ${delayMs}ms, source=${event.source})")
+                        return@launch
+                    }
                 }
-                if (foundSession != null) {
-                    bindToFocusedTerminal(event.sessionId, foundSession, event.source)
-                } else {
-                    logger.warn("Session ${event.sessionId} not found for ${event.source} event")
-                }
+                logger.info("Session ${event.sessionId} never appeared in index after all retries for ${event.source} event (binding still valid)")
             }
-        } else {
-            bindToFocusedTerminal(event.sessionId, session, event.source)
         }
     }
 
     /**
      * Binds the session to the currently focused terminal tab.
+     * Session metadata is optional - binding works with just the session ID.
      */
     private fun bindToFocusedTerminal(
         sessionId: String,
-        session: com.github.jendalen.claudesessionmanager.model.ClaudeSession,
+        session: com.github.jendalen.claudesessionmanager.model.ClaudeSession?,
         source: String
     ) {
         ApplicationManager.getApplication().invokeLater {
             try {
                 val toolWindow = TerminalHelper.getTerminalToolWindow(project)
                 if (toolWindow == null) {
-                    logger.debug("Terminal tool window not available")
+                    logger.info("Auto-bind skipped: Terminal tool window not available (project=${project.name}, session=$sessionId, source=$source)")
                     return@invokeLater
                 }
 
-                if (!toolWindow.isVisible) {
-                    logger.debug("Terminal tool window not visible")
-                    return@invokeLater
-                }
+                // NOTE: Do NOT check toolWindow.isVisible here.
+                // The terminal might not be the active tool window (editor or project tree
+                // could be focused), but selectedContent is still valid from the user's
+                // last interaction with the terminal tab.
 
                 val contentManager = toolWindow.contentManager
                 val selectedContent = contentManager.selectedContent
                 if (selectedContent == null) {
-                    logger.debug("No terminal tab selected")
+                    logger.info("Auto-bind skipped: No terminal tab selected (project=${project.name}, session=$sessionId, source=$source)")
                     return@invokeLater
                 }
 
-                val tabName = selectedContent.displayName ?: return@invokeLater
+                // Skip team-managed tabs - v2.0 handles their binding
+                if (TerminalHelper.isTeamTab(selectedContent)) {
+                    logger.info("Auto-bind skipped: Team-managed tab (project=${project.name}, session=$sessionId, source=$source)")
+                    return@invokeLater
+                }
+
+                val tabName = selectedContent.displayName
+                if (tabName.isNullOrBlank()) {
+                    logger.info("Auto-bind skipped: Terminal tab has no/blank display name (project=${project.name}, session=$sessionId, source=$source)")
+                    return@invokeLater
+                }
 
                 val tabIdentifier = TabIdentifier(
                     name = tabName,
@@ -345,28 +296,46 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 val existingBinding = bindingService.findBindingForTab(tabIdentifier)
 
                 val settings = SettingsService.getInstance()
+                val displayInfo = session?.displaySummary() ?: "${sessionId.take(8)}..."
 
                 if (existingBinding != null) {
-                    // Update existing binding if session changed
-                    if (!existingBinding.currentSessionId.equals(sessionId, ignoreCase = true)) {
+                    // During auto-resume window, don't update existing bindings.
+                    // Auto-resume already has the correct session from persistence.
+                    // Hook events during this window are side-effects of the resume
+                    // (startup + resume events interleave and cause binding flip-flop).
+                    val isSuppressed = System.currentTimeMillis() < autoResumeSuppressUntil
+                    if (isSuppressed) {
+                        logger.info("Hook event suppressed during auto-resume window: session=$sessionId, tab='$tabName', source=$source")
+                    } else if (!existingBinding.currentSessionId.equals(sessionId, ignoreCase = true)) {
                         bindingService.updateBindingSession(existingBinding.id, sessionId)
                         logger.info("Auto-updated binding for '$tabName' from ${existingBinding.currentSessionId} to $sessionId (source=$source)")
 
                         if (settings.notifyOnAutoDetection) {
                             showNotification(
                                 "Session changed in '$tabName'",
-                                "Updated to: ${session.displaySummary()} (via $source)",
+                                "Updated to: $displayInfo (via $source)",
                                 NotificationType.INFORMATION
                             )
                         }
                     } else {
-                        logger.debug("Session $sessionId already bound to '$tabName'")
+                        logger.info("Session $sessionId already bound to '$tabName' (source=$source)")
                     }
                 } else {
-                    // Don't auto-create bindings from hook events - we can't reliably know
-                    // which terminal tab the Claude session is actually running in.
-                    // New bindings should be created via manual binding or terminal output monitoring.
-                    logger.debug("No existing binding for focused tab '$tabName', skipping auto-bind (session=$sessionId, source=$source)")
+                    // Create a new binding - the hook event tells us Claude started/resumed
+                    // in the currently focused terminal tab
+                    bindingService.createBinding(tabIdentifier, sessionId)
+                    logger.info("Auto-bound tab '$tabName' to session $sessionId (source=$source)")
+
+                    // Set Claude icon
+                    TerminalHelper.setClaudeIconOnContent(selectedContent)
+
+                    if (settings.notifyOnAutoDetection) {
+                        showNotification(
+                            "Claude session detected",
+                            "Auto-bound '$tabName' to: $displayInfo (via $source)",
+                            NotificationType.INFORMATION
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 logger.warn("Failed to bind to focused terminal: ${e.message}", e)
@@ -388,6 +357,29 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         }
         watchService = null
         logger.info("Stopped watching Claude hook events")
+    }
+
+    /**
+     * Activates the auto-resume suppression window.
+     * During this window, hook events will not update existing bindings
+     * (only create new ones). This prevents binding flip-flop during
+     * multi-tab auto-resume on IDE startup.
+     */
+    fun suppressForAutoResume() {
+        autoResumeSuppressUntil = System.currentTimeMillis() + AUTO_RESUME_SUPPRESS_BUFFER_MS
+        logger.info("Auto-resume suppression window active for ${AUTO_RESUME_SUPPRESS_BUFFER_MS}ms")
+    }
+
+    /**
+     * Checks if two paths have a directory containment relationship.
+     * Unlike string prefix matching, this ensures the match is at a directory boundary.
+     * e.g., /foo/bar matches /foo/bar/baz but NOT /foo/bar-other
+     */
+    private fun isDirectoryMatch(eventCwd: String, projectPath: String): Boolean {
+        val normalizedCwd = eventCwd.trimEnd('/')
+        val normalizedProject = projectPath.trimEnd('/')
+        return normalizedCwd == normalizedProject ||
+               normalizedCwd.startsWith("$normalizedProject/")
     }
 
     private fun showNotification(title: String, content: String, type: NotificationType) {

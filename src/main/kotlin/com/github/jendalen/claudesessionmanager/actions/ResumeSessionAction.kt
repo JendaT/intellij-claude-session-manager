@@ -1,7 +1,6 @@
 package com.github.jendalen.claudesessionmanager.actions
 
 import com.github.jendalen.claudesessionmanager.services.BindingService
-import com.github.jendalen.claudesessionmanager.services.ClaudeSessionService
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationType
@@ -38,18 +37,7 @@ class ResumeSessionAction : AnAction() {
             return
         }
 
-        // Check if session still exists
-        val sessionService = ClaudeSessionService.getInstance(project)
-        if (!sessionService.sessionExists(binding.currentSessionId)) {
-            showNotification(
-                project,
-                "Session no longer exists. Consider rebinding to a new session.",
-                NotificationType.WARNING
-            )
-            return
-        }
-
-        // Resume the session using improved terminal execution
+        // Resume the session - Claude CLI handles invalid IDs gracefully
         if (!TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)) {
             showNotification(project, "Failed to execute resume command", NotificationType.ERROR)
             return
