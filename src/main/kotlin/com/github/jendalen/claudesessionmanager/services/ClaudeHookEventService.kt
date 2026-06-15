@@ -222,7 +222,7 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         val session = sessionService.findSessionByIdGlobal(event.sessionId)
 
         // Bind immediately - the hook event is authoritative, no index verification needed
-        bindToFocusedTerminal(event.sessionId, session, event.source)
+        bindToFocusedTerminal(event.sessionId, session, event.source, event.cwd)
 
         // If session wasn't in index, schedule background retries to log when it appears
         if (session == null) {
@@ -251,7 +251,8 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     private fun bindToFocusedTerminal(
         sessionId: String,
         session: com.github.jendalen.claudesessionmanager.model.ClaudeSession?,
-        source: String
+        source: String,
+        cwd: String = ""
     ) {
         ApplicationManager.getApplication().invokeLater {
             try {
@@ -285,11 +286,15 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                     return@invokeLater
                 }
 
+                // Stable id makes the binding independent of Claude Code's tab renaming.
+                val tabId = TerminalHelper.getOrCreateTabId(selectedContent)
+
                 val tabIdentifier = TabIdentifier(
                     name = tabName,
                     createdAt = System.currentTimeMillis(),
                     shellPid = null,
-                    workingDirectory = null
+                    workingDirectory = cwd.ifBlank { null },
+                    tabUuid = tabId
                 )
 
                 val bindingService = BindingService.getInstance(project)
@@ -299,6 +304,11 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 val displayInfo = session?.displaySummary() ?: "${sessionId.take(8)}..."
 
                 if (existingBinding != null) {
+                    // Self-heal legacy (name-only) bindings by pinning them to the stable tab id.
+                    if (existingBinding.tabIdentifier.tabUuid == null) {
+                        bindingService.attachTabUuid(existingBinding.id, tabId)
+                    }
+
                     // During auto-resume window, don't update existing bindings.
                     // Auto-resume already has the correct session from persistence.
                     // Hook events during this window are side-effects of the resume

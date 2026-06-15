@@ -53,6 +53,7 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
         var tabCreatedAt: Long = 0
         var tabShellPid: Long? = null
         var tabWorkingDirectory: String? = null
+        var tabUuid: String? = null   // Stable per-tab id; null for legacy (pre-v2) bindings
         var currentSessionId: String = ""
         var autoResume: Boolean = true
         var createdAt: Long = 0
@@ -229,6 +230,22 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
     }
 
     /**
+     * Attaches/replaces the stable tab UUID on a binding's identifier, preserving all other
+     * identifier fields. Used by migration to bind legacy (name-only) bindings to the stable
+     * id of a now-matched live tab.
+     */
+    fun attachTabUuid(bindingId: String, tabUuid: String): SessionBinding? {
+        val binding = bindingsCache[bindingId] ?: return null
+        val updated = binding.copy(
+            tabIdentifier = binding.tabIdentifier.copy(tabUuid = tabUuid)
+        )
+        bindingsCache[bindingId] = updated
+        syncToState()
+        logger.info("Attached stable tab id $tabUuid to binding $bindingId")
+        return updated
+    }
+
+    /**
      * Returns all bindings with auto-resume enabled.
      */
     fun getAutoResumeBindings(): List<SessionBinding> {
@@ -255,6 +272,7 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
             tabCreatedAt = binding.tabIdentifier.createdAt
             tabShellPid = binding.tabIdentifier.shellPid
             tabWorkingDirectory = binding.tabIdentifier.workingDirectory
+            tabUuid = binding.tabIdentifier.tabUuid
             currentSessionId = binding.currentSessionId
             autoResume = binding.autoResume
             createdAt = binding.createdAt
@@ -276,7 +294,8 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
                 name = entry.tabName,
                 createdAt = entry.tabCreatedAt,
                 shellPid = entry.tabShellPid,
-                workingDirectory = entry.tabWorkingDirectory
+                workingDirectory = entry.tabWorkingDirectory,
+                tabUuid = entry.tabUuid
             ),
             currentSessionId = entry.currentSessionId,
             sessionHistory = entry.history.map { h ->
@@ -292,8 +311,24 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
         )
     }
 
+    /**
+     * The persisted schema version of the currently loaded state.
+     * Used by BindingMigrationService to decide whether a one-time migration is needed.
+     */
+    fun loadedSchemaVersion(): Int = state.schemaVersion
+
+    /**
+     * Marks the loaded state as migrated to the current schema version and flushes.
+     */
+    fun markSchemaCurrent() {
+        if (state.schemaVersion != CURRENT_SCHEMA_VERSION) {
+            state.schemaVersion = CURRENT_SCHEMA_VERSION
+            syncToState()
+        }
+    }
+
     companion object {
-        private const val CURRENT_SCHEMA_VERSION = 1
+        const val CURRENT_SCHEMA_VERSION = 2
         private const val SAVE_DEBOUNCE_MS = 200
 
         fun getInstance(project: Project): BindingService {

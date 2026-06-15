@@ -61,7 +61,9 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         Pattern.CASE_INSENSITIVE
     )
 
-    // Track monitored tabs to avoid duplicate listeners
+    // Track monitored tabs to avoid duplicate listeners.
+    // Keyed by the stable per-tab id (Content UserData), NOT the displayName - the name is
+    // overwritten by Claude Code's title takeover and is no longer a stable key.
     private val monitoredTabs = ConcurrentHashMap<String, TabMonitor>()
 
     // Coroutine scope for async operations - use SupervisorJob for proper cancellation
@@ -107,21 +109,23 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
      * Starts monitoring a specific terminal tab for session IDs.
      */
     private fun monitorTab(tab: TerminalToolWindowTab) {
-        val tabName = tab.content.displayName ?: return
+        val content = tab.content
+        // Stable id is the monitoring key; survives Claude Code renaming the tab.
+        val tabId = TerminalHelper.getOrCreateTabId(content)
+        val tabName = content.displayName ?: "Terminal"
 
         // Avoid duplicate monitoring
-        if (monitoredTabs.containsKey(tabName)) {
-            logger.debug("Tab '$tabName' already monitored")
+        if (monitoredTabs.containsKey(tabId)) {
+            logger.debug("Tab '$tabName' (id=$tabId) already monitored")
             return
         }
 
-        // Listen for tab renames to update bindings
-        val content = tab.content
+        // Listen for tab renames purely to keep the monitor's display label current for logs.
+        // Renames no longer affect binding identity (that is keyed on the stable id).
         val renameListener = PropertyChangeListener { evt ->
             if (evt.propertyName == Content.PROP_DISPLAY_NAME) {
-                val oldName = evt.oldValue as? String ?: return@PropertyChangeListener
                 val newName = evt.newValue as? String ?: return@PropertyChangeListener
-                handleTabRenamed(oldName, newName)
+                monitoredTabs[tabId]?.tabName = newName
             }
         }
         content.addPropertyChangeListener(renameListener)
@@ -131,16 +135,17 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             val outputModels = terminalView.outputModels
 
             // Create a disposable for this tab's monitoring
-            val tabDisposable = Disposer.newDisposable("TerminalOutputMonitor-$tabName")
+            val tabDisposable = Disposer.newDisposable("TerminalOutputMonitor-$tabId")
             Disposer.register(this, tabDisposable)
 
             // Create tab monitor
             val tabMonitor = TabMonitor(
+                tabId = tabId,
                 tabName = tabName,
                 tab = tab,
                 disposable = tabDisposable
             )
-            monitoredTabs[tabName] = tabMonitor
+            monitoredTabs[tabId] = tabMonitor
 
             // Monitor the active output model via StateFlow
             scope.launch {
@@ -358,12 +363,13 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         val tabName = tabMonitor.tabName
         val bindingService = BindingService.getInstance(project)
 
-        // Create tab identifier
+        // Create tab identifier keyed on the stable tab id (name is informational only).
         val tabIdentifier = TabIdentifier(
             name = tabName,
             createdAt = System.currentTimeMillis(),
             shellPid = null,
-            workingDirectory = null
+            workingDirectory = null,
+            tabUuid = tabMonitor.tabId
         )
 
         val existingBinding = bindingService.findBindingForTab(tabIdentifier)
@@ -376,6 +382,12 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             if (TerminalHelper.isTeamTab(content)) return@invokeLater
 
             if (existingBinding != null) {
+                // Self-heal: if this matched a legacy (name-only) binding, pin it to the
+                // stable tab id so future matching no longer depends on the volatile name.
+                if (existingBinding.tabIdentifier.tabUuid == null) {
+                    bindingService.attachTabUuid(existingBinding.id, tabMonitor.tabId)
+                }
+
                 // Update existing binding if session changed
                 if (!existingBinding.currentSessionId.equals(sessionId, ignoreCase = true)) {
                     bindingService.updateBindingSession(existingBinding.id, sessionId)
@@ -411,50 +423,13 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     }
 
     /**
-     * Stops monitoring a specific tab.
+     * Stops monitoring a specific tab, identified by its stable tab id.
      */
-    fun stopMonitoringTab(tabName: String) {
-        val monitor = monitoredTabs.remove(tabName)
+    fun stopMonitoringTab(tabId: String) {
+        val monitor = monitoredTabs.remove(tabId)
         if (monitor != null) {
             Disposer.dispose(monitor.disposable)
-            logger.debug("Stopped monitoring tab '$tabName'")
-        }
-    }
-
-    /**
-     * Handles tab rename events - updates binding if one exists.
-     */
-    private fun handleTabRenamed(oldName: String, newName: String) {
-        if (oldName == newName) return
-
-        logger.info("Terminal tab renamed: '$oldName' -> '$newName'")
-
-        // Update the monitoredTabs map and the monitor's own name
-        val monitor = monitoredTabs.remove(oldName)
-        if (monitor != null) {
-            monitor.tabName = newName
-            monitoredTabs[newName] = monitor
-        }
-
-        // Update binding if one exists for the old name
-        val bindingService = BindingService.getInstance(project)
-        val oldTabIdentifier = TabIdentifier(
-            name = oldName,
-            createdAt = System.currentTimeMillis(),
-            shellPid = null,
-            workingDirectory = null
-        )
-
-        val binding = bindingService.findBindingForTab(oldTabIdentifier)
-        if (binding != null) {
-            val newTabIdentifier = TabIdentifier(
-                name = newName,
-                createdAt = System.currentTimeMillis(),
-                shellPid = null,
-                workingDirectory = null
-            )
-            bindingService.updateBindingTab(binding.id, newTabIdentifier)
-            logger.info("Updated binding for renamed tab: '$oldName' -> '$newName'")
+            logger.debug("Stopped monitoring tab '${monitor.tabName}' (id=$tabId)")
         }
     }
 
@@ -463,11 +438,11 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
      */
     fun stopMonitoring() {
         isActive = false
-        for ((tabName, monitor) in monitoredTabs) {
+        for ((_, monitor) in monitoredTabs) {
             try {
                 Disposer.dispose(monitor.disposable)
             } catch (e: Exception) {
-                logger.debug("Error disposing monitor for '$tabName': ${e.message}")
+                logger.debug("Error disposing monitor for '${monitor.tabName}': ${e.message}")
             }
         }
         monitoredTabs.clear()
@@ -487,6 +462,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
      * Class to track monitoring state for a tab.
      */
     private class TabMonitor(
+        val tabId: String,
         @Volatile var tabName: String,
         val tab: TerminalToolWindowTab,
         val disposable: Disposable,

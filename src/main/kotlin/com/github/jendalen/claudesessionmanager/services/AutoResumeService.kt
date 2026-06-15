@@ -33,7 +33,8 @@ class AutoResumeService : ProjectActivity {
         // Check if auto-resume is enabled
         if (!settings.autoResumeEnabled) {
             logger.info("Auto-resume disabled in settings")
-            // Still start the session watcher
+            // Still migrate legacy bindings and start the session watcher.
+            runMigration(project)
             startSessionWatcher(project)
             return
         }
@@ -44,6 +45,10 @@ class AutoResumeService : ProjectActivity {
 
         // Wait for terminal to initialize
         delay(delayMs.toLong())
+
+        // Migrate legacy name-only bindings onto the stable tab id model before resuming, so
+        // tabs can be matched by id rather than the now-volatile displayName. Runs on EDT.
+        runMigration(project)
 
         // Get bindings that need auto-resume
         val bindingService = BindingService.getInstance(project)
@@ -73,11 +78,18 @@ class AutoResumeService : ProjectActivity {
         // Resume each binding
         for (binding in bindings) {
             val tabName = binding.tabIdentifier.name
+            val tabUuid = binding.tabIdentifier.tabUuid
 
-            // Find terminal tab by name using TerminalToolWindowTabsManager
-            val terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
+            // Prefer matching by stable tab id (set this startup by migration); fall back to name.
             val toolWindow = TerminalHelper.getTerminalToolWindow(project)
-            val content = toolWindow?.contentManager?.contents?.find { it.displayName == tabName }
+            var terminalView = tabUuid?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
+            var content = tabUuid?.let { TerminalHelper.findContentByTabId(project, it) }
+            if (terminalView == null && content == null) {
+                terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
+                content = toolWindow?.contentManager?.contents?.find { it.displayName == tabName }
+            }
+            // Resolve the id we will target with the command (the tab's actual current id).
+            val resolvedTabId = content?.let { TerminalHelper.getTabId(it) } ?: tabUuid
 
             if (terminalView == null && content == null) {
                 logger.info("Terminal tab '$tabName' not found - adding to missing list")
@@ -90,7 +102,8 @@ class AutoResumeService : ProjectActivity {
                 tabName = tabName,
                 terminalView = terminalView,
                 shellWidget = TerminalHelper.findWidgetByName(project, tabName),
-                content = content
+                content = content,
+                tabId = resolvedTabId
             )
 
             // Resume the session
@@ -131,6 +144,20 @@ class AutoResumeService : ProjectActivity {
 
         // Start session watcher for detecting /clear, /compact etc.
         startSessionWatcher(project)
+    }
+
+    /**
+     * Runs the legacy-binding migration synchronously on the EDT so that bindings carry their
+     * stable tab id before the resume loop (which matches tabs by that id) executes.
+     */
+    private fun runMigration(project: Project) {
+        try {
+            ApplicationManager.getApplication().invokeAndWait {
+                BindingMigrationService.getInstance(project).migrate()
+            }
+        } catch (e: Exception) {
+            logger.warn("Binding migration failed: ${e.message}", e)
+        }
     }
 
     private fun startSessionWatcher(project: Project) {
