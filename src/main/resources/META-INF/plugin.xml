@@ -23,6 +23,17 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.5.0</h3>
+        <ul>
+            <li>Fixed: Session bindings broke when Claude Code renamed terminal tabs (e.g. all tabs
+                showing "Claude Code") on recent JetBrains builds. Tabs are now matched by a stable
+                per-tab id instead of the volatile tab name, so renaming no longer loses bindings
+                or causes cross-tab confusion.</li>
+            <li>New: One-time, idempotent migration of existing bindings to the stable-id model.</li>
+            <li>New: "Keep my custom tab names" setting that disables Claude Code's tab renaming
+                (CLAUDE_CODE_DISABLE_TERMINAL_TITLE) for users who prefer their own names.</li>
+        </ul>
+
         <h3>0.3.0</h3>
         <ul>
             <li>New: Agent Teams support - team dashboard, teammate terminal tabs</li>
@@ -66,6 +77,10 @@
             serviceInterface="com.github.jendalen.claudesessionmanager.services.OptionAsMetaKeyGuardService"
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.OptionAsMetaKeyGuardService"/>
 
+        <applicationService
+            serviceInterface="com.github.jendalen.claudesessionmanager.services.ClaudeTitleSettingsService"
+            serviceImplementation="com.github.jendalen.claudesessionmanager.services.ClaudeTitleSettingsService"/>
+
         <!-- Project-level services -->
         <projectService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.ClaudeSessionService"
@@ -74,6 +89,10 @@
         <projectService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.BindingService"
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.BindingService"/>
+
+        <projectService
+            serviceInterface="com.github.jendalen.claudesessionmanager.services.BindingMigrationService"
+            serviceImplementation="com.github.jendalen.claudesessionmanager.services.BindingMigrationService"/>
 
         <projectService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.SessionWatcherService"

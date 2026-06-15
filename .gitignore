@@ -20,3 +20,6 @@ out/
 
 # Local configuration
 local.properties
+
+# Local Claude Code session config (permissions, etc.)
+.claude/

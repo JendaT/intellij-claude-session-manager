@@ -2,6 +2,7 @@ package com.github.jendalen.claudesessionmanager.settings
 
 import com.github.jendalen.claudesessionmanager.model.PluginSettings
 import com.github.jendalen.claudesessionmanager.services.ClaudeHookManager
+import com.github.jendalen.claudesessionmanager.services.ClaudeTitleSettingsService
 import com.github.jendalen.claudesessionmanager.services.OptionAsMetaKeyGuardService
 import com.github.jendalen.claudesessionmanager.services.SettingsService
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
@@ -26,6 +27,7 @@ class PluginSettingsConfigurable : Configurable {
     private var panel: DialogPanel? = null
     private val settingsService = SettingsService.getInstance()
     private val hookManager = ClaudeHookManager.getInstance()
+    private val titleSettings = ClaudeTitleSettingsService.getInstance()
 
     // UI state
     private var claudeCommand = settingsService.claudeCommand
@@ -36,6 +38,9 @@ class PluginSettingsConfigurable : Configurable {
     private var syncTabNames = settingsService.syncTabNames
     private var customClaudeHomePath = settingsService.customClaudeHomePath ?: ""
     private var forceOptionAsMetaKeyOff = settingsService.forceOptionAsMetaKeyOff
+
+    // File-backed (~/.claude/settings.json), not a plugin-persisted setting.
+    private var disableClaudeTabTitle = titleSettings.isTitleDisabled()
 
     // Integration UI components (need to be refreshed)
     private var statusLabel: JBLabel? = null
@@ -111,6 +116,16 @@ class PluginSettingsConfigurable : Configurable {
                 row {
                     checkBox("Sync Claude /rename to terminal tab name")
                         .bindSelected(::syncTabNames)
+                }
+                row {
+                    checkBox("Keep my custom tab names (disable Claude Code's tab renaming)")
+                        .bindSelected(::disableClaudeTabTitle)
+                        .comment(
+                            "Sets ${ClaudeTitleSettingsService.ENV_KEY}=1 in ~/.claude/settings.json. " +
+                                "Claude Code renames terminal tabs (to \"Claude Code\" etc.) via a terminal " +
+                                "escape sequence; enable this to keep your own tab names. Session binding works " +
+                                "either way."
+                        )
                 }
             }
 
@@ -275,7 +290,8 @@ class PluginSettingsConfigurable : Configurable {
                 notifyOnAutoDetection != settings.notifyOnAutoDetection ||
                 syncTabNames != settings.syncTabNames ||
                 customClaudeHomePath != (settings.customClaudeHomePath ?: "") ||
-                forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff
+                forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff ||
+                disableClaudeTabTitle != titleSettings.isTitleDisabled()
         }
     }
 
@@ -300,6 +316,17 @@ class PluginSettingsConfigurable : Configurable {
 
         // Notify the guard service so it can act immediately if just enabled
         OptionAsMetaKeyGuardService.getInstance().onGuardSettingChanged(forceOptionAsMetaKeyOff)
+
+        // Apply the Claude Code tab-title toggle to ~/.claude/settings.json if it changed.
+        if (disableClaudeTabTitle != titleSettings.isTitleDisabled()) {
+            val (ok, error) = titleSettings.setTitleDisabled(disableClaudeTabTitle)
+            if (!ok) {
+                Messages.showWarningDialog(
+                    "Could not update ~/.claude/settings.json: $error",
+                    "Claude Session Manager"
+                )
+            }
+        }
     }
 
     override fun reset() {
@@ -312,6 +339,7 @@ class PluginSettingsConfigurable : Configurable {
         syncTabNames = settings.syncTabNames
         customClaudeHomePath = settings.customClaudeHomePath ?: ""
         forceOptionAsMetaKeyOff = settings.forceOptionAsMetaKeyOff
+        disableClaudeTabTitle = titleSettings.isTitleDisabled()
         panel?.reset()
         refreshIntegrationStatus()
     }

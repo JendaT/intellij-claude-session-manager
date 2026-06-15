@@ -29,7 +29,8 @@ data class TerminalTabContext(
     val tabName: String,
     val terminalView: TerminalView?,
     val shellWidget: ShellTerminalWidget?,
-    val content: Content?
+    val content: Content?,
+    val tabId: String? = null  // Stable per-tab id (Content UserData), when available
 ) {
     fun canExecuteCommands(): Boolean = terminalView != null || shellWidget != null
 }
@@ -51,10 +52,67 @@ object TerminalHelper {
     val TEAM_TAB_KEY = Key.create<String>("ClaudeTeams.TeamTab")
 
     /**
+     * Stable per-tab identity stored in the tab's Content UserData.
+     *
+     * This is the primary key used to match terminal tabs to session bindings. Unlike the
+     * tab's displayName, it survives renames - including Claude Code's OSC-0 title takeover
+     * (which renames every Claude tab to "Claude Code" on recent JetBrains builds). The
+     * Content object keeps the same UserData for its whole lifetime within an IDE session.
+     */
+    val STABLE_TAB_KEY = Key.create<String>("ClaudeSessionManager.StableTabId")
+
+    /**
      * Checks if a terminal tab Content is managed by the team system.
      */
     fun isTeamTab(content: Content): Boolean {
         return content.getUserData(TEAM_TAB_KEY) != null
+    }
+
+    /**
+     * Returns the stable tab id for a Content, generating and storing one if absent.
+     * Safe to call repeatedly - the same id is returned for the life of the Content.
+     */
+    fun getOrCreateTabId(content: Content): String {
+        content.getUserData(STABLE_TAB_KEY)?.let { return it }
+        val id = java.util.UUID.randomUUID().toString()
+        content.putUserData(STABLE_TAB_KEY, id)
+        logger.debug("Assigned stable tab id $id to tab '${content.displayName}'")
+        return id
+    }
+
+    /**
+     * Returns the stable tab id for a Content if one has been assigned, else null.
+     * Does NOT generate a new id.
+     */
+    fun getTabId(content: Content): String? = content.getUserData(STABLE_TAB_KEY)
+
+    /**
+     * Stamps a specific stable id onto a Content. Used by migration to attach a UUID that
+     * has already been persisted into a binding, so the live tab and binding agree.
+     */
+    fun setTabId(content: Content, tabId: String) {
+        content.putUserData(STABLE_TAB_KEY, tabId)
+    }
+
+    /**
+     * Finds the terminal tab Content carrying the given stable tab id.
+     */
+    fun findContentByTabId(project: Project, tabId: String): Content? {
+        val toolWindow = getTerminalToolWindow(project) ?: return null
+        return toolWindow.contentManager.contents.firstOrNull { getTabId(it) == tabId }
+    }
+
+    /**
+     * Finds a TerminalView by stable tab id using TerminalToolWindowTabsManager.
+     */
+    fun findTerminalViewByTabId(project: Project, tabId: String): TerminalView? {
+        return try {
+            val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
+            tabsManager.tabs.firstOrNull { getTabId(it.content) == tabId }?.view
+        } catch (ex: Exception) {
+            logger.debug("TerminalToolWindowTabsManager not available: ${ex.message}")
+            null
+        }
     }
 
     /**
@@ -87,12 +145,16 @@ object TerminalHelper {
         // Try to get ShellTerminalWidget (classic terminal)
         val shellWidget = findShellWidgetByName(project, tabName)
 
+        // Stamp/read the stable id so this tab can be matched independently of its name
+        val tabId = getOrCreateTabId(selectedContent)
+
         // Return context if we have at least a tab name
         return TerminalTabContext(
             tabName = tabName,
             terminalView = terminalView,
             shellWidget = shellWidget,
-            content = selectedContent
+            content = selectedContent,
+            tabId = tabId
         )
     }
 
@@ -206,14 +268,15 @@ object TerminalHelper {
     }
 
     /**
-     * Creates a TabIdentifier for a terminal context.
+     * Creates a TabIdentifier for a terminal context, carrying the stable tab id when known.
      */
     fun createTabIdentifier(context: TerminalTabContext): TabIdentifier {
         return TabIdentifier(
             name = context.tabName,
             createdAt = System.currentTimeMillis(),
             shellPid = null,
-            workingDirectory = null
+            workingDirectory = null,
+            tabUuid = context.tabId
         )
     }
 
@@ -336,8 +399,8 @@ object TerminalHelper {
     fun executeCommandInTerminal(project: Project, context: TerminalTabContext, sessionId: String): Boolean {
         val command = buildResumeCommand(sessionId)
 
-        // APPROACH 1 (BEST): Use TerminalToolWindowTabsManager API for reworked terminal (2025+)
-        // This is the correct official API for WebStorm 2025's reworked terminal
+        // APPROACH 1 (BEST): Match by stable tab id, falling back to name. Matching by name
+        // alone is unreliable now that Claude Code renames every tab to "Claude Code".
         try {
             val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
             val tabs = tabsManager.tabs
@@ -345,15 +408,16 @@ object TerminalHelper {
 
             for (tab in tabs) {
                 val tabContent = tab.content
-                val tabName = tabContent.displayName ?: continue
+                val matchesById = context.tabId != null && getTabId(tabContent) == context.tabId
+                val matchesByName = context.tabId == null && tabContent.displayName == context.tabName
 
-                if (tabName == context.tabName) {
+                if (matchesById || matchesByName) {
                     val terminalView = tab.view
                     try {
                         terminalView.createSendTextBuilder()
                             .shouldExecute()
                             .send(command)
-                        logger.info("Executed command via TerminalToolWindowTabsManager: $command")
+                        logger.info("Executed command via TerminalToolWindowTabsManager (byId=$matchesById): $command")
                         return true
                     } catch (ex: Exception) {
                         logger.warn("TerminalToolWindowTabsManager sendText failed: ${ex.message}", ex)
