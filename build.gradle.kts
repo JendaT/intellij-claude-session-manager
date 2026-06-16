@@ -48,7 +48,10 @@ intellijPlatform {
         version = providers.gradleProperty("pluginVersion")
 
         ideaVersion {
-            sinceBuild = "253"
+            // 261 floor: the reworked-terminal TerminalTabsManagerListener gained default
+            // methods (terminalViewCreated/tabDetached) after 253. Building against 261 emits
+            // references to them, which NoSuchMethodError on 2025.3 (253). Floor is 261+.
+            sinceBuild = "261"
             untilBuild = provider { null }  // No upper limit
         }
 
