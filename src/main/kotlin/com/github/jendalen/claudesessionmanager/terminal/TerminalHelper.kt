@@ -110,15 +110,24 @@ object TerminalHelper {
      * takeover ("Claude Code", "* Doing X...") cannot pollute it. Restored tabs come back
      * with exactly this name, which makes it the cross-restart identity key.
      *
-     * Falls back to the Content displayName when no title info is available.
+     * Returns null when no TerminalTitle is resolvable. Deliberately does NOT fall back to
+     * Content.displayName: the display name may carry the OSC application title, and persisting
+     * it as the restart-stable key would corrupt cross-restart matching. Callers must treat
+     * null as "identity unknown" (TabIdentifier.effectiveName then falls back to the display
+     * name for matching only, without persisting it as a stable name).
      */
     fun getPersistentName(project: Project, content: Content): String? {
-        val title = findTerminalTitle(project, content)
-        if (title != null) {
-            val name = title.userDefinedTitle ?: title.defaultTitle
-            if (!name.isNullOrBlank()) return name
-        }
-        return content.displayName
+        val title = findTerminalTitle(project, content) ?: return null
+        return persistentNameOf(title)
+    }
+
+    /**
+     * Derives the terminal-persisted (restart-stable) name from a TerminalTitle.
+     * Single source of truth for this derivation - keep all call sites on it.
+     */
+    fun persistentNameOf(title: com.intellij.terminal.TerminalTitle): String? {
+        return title.userDefinedTitle?.takeUnless { it.isBlank() }
+            ?: title.defaultTitle?.takeUnless { it.isBlank() }
     }
 
     /**
@@ -160,7 +169,22 @@ object TerminalHelper {
             }
             logger.info("Protected tab title for '${content.displayName}'")
         } catch (ex: Exception) {
-            logger.warn("Failed to protect tab title for '${content.displayName}': ${ex.message}")
+            logger.warn("Failed to protect tab title for '${content.displayName}': ${ex.message}", ex)
+        }
+    }
+
+    /**
+     * Reverts [protectTabTitle]: the tab follows OSC application-title changes again.
+     */
+    fun unprotectTabTitle(project: Project, content: Content) {
+        try {
+            val title = findTerminalTitle(project, content) ?: return
+            title.change {
+                trackTerminalApplicationTitleChanges = true
+            }
+            logger.info("Unprotected tab title for '${content.displayName}'")
+        } catch (ex: Exception) {
+            logger.warn("Failed to unprotect tab title for '${content.displayName}': ${ex.message}", ex)
         }
     }
 
@@ -171,6 +195,38 @@ object TerminalHelper {
         if (SettingsService.getInstance().protectTabNames) {
             protectTabTitle(project, content)
         }
+    }
+
+    /**
+     * Applies or reverts title protection on every tab of this project that currently has a
+     * session binding. Called when the "protect tab names" setting is toggled, so the change
+     * takes effect immediately instead of on the next session event. Must run on EDT.
+     */
+    fun updateTitleProtectionForBoundTabs(project: Project, enabled: Boolean) {
+        val bindingService = com.github.jendalen.claudesessionmanager.services.BindingService.getInstance(project)
+        for (binding in bindingService.getAllBindings()) {
+            val tabUuid = binding.tabIdentifier.tabUuid ?: continue
+            val content = findContentByTabId(project, tabUuid) ?: continue
+            if (enabled) protectTabTitle(project, content) else unprotectTabTitle(project, content)
+        }
+    }
+
+    /**
+     * Returns the persistent (restart-stable) name of every terminal tab Content in one pass
+     * over the reworked terminal's tab list. Contents without a resolvable TerminalTitle map
+     * to null. Cheaper than calling [getPersistentName] per tab (which rescans the tab list).
+     */
+    fun persistentNamesSnapshot(project: Project): Map<Content, String?> {
+        val result = mutableMapOf<Content, String?>()
+        try {
+            val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
+            for (tab in tabsManager.tabs) {
+                result[tab.content] = persistentNameOf(tab.view.title)
+            }
+        } catch (ex: Exception) {
+            logger.debug("TerminalToolWindowTabsManager not available: ${ex.message}")
+        }
+        return result
     }
 
     /**

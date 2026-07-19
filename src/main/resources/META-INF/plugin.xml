@@ -106,6 +106,10 @@
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.BindingService"/>
 
         <projectService
+            serviceInterface="com.github.jendalen.claudesessionmanager.services.TabBindingCoordinator"
+            serviceImplementation="com.github.jendalen.claudesessionmanager.services.TabBindingCoordinator"/>
+
+        <projectService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.BindingMigrationService"
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.BindingMigrationService"/>
 

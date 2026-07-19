@@ -86,7 +86,10 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
 
     // Convenience accessors
     var claudeCommand: String
-        get() = state.claudeCommand.ifBlank { "claude" }
+        // Re-validate on read: loadState() takes persisted XML as-is, and this getter feeds
+        // the command that gets typed into the user's shell - the allowlist must hold here,
+        // not only in PluginSettings.validated().
+        get() = state.claudeCommand.takeIf { it.isNotBlank() && it.matches(COMMAND_ALLOWLIST) } ?: "claude"
         set(value) { state.claudeCommand = value.ifBlank { "claude" } }
 
     var autoResumeEnabled: Boolean
@@ -125,6 +128,10 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         set(value) { state.protectTabNames = value }
 
     companion object {
+        // Same allowlist as PluginSettings.validated() - keeps shell metacharacters out of
+        // the resume command even if the persisted XML was tampered with.
+        private val COMMAND_ALLOWLIST = Regex("[a-zA-Z0-9_./ \\-]+")
+
         fun getInstance(): SettingsService {
             return ApplicationManager.getApplication().getService(SettingsService::class.java)
         }

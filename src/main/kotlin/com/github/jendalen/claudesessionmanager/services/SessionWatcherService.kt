@@ -2,8 +2,6 @@ package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
-import com.github.jendalen.claudesessionmanager.util.NotificationHelper
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -269,7 +267,7 @@ class SessionWatcherService(private val project: Project) : Disposable {
             logger.info("Detected ${recentlyModifiedSessions.size} modified session(s), most recent: ${mostRecentSession.sessionId}")
 
             // Try to auto-bind or update the focused terminal
-            tryAutoBindOrUpdateSession(mostRecentSession, bindingService, newSessionIds.contains(mostRecentSession.sessionId))
+            tryAutoBindOrUpdateSession(mostRecentSession, newSessionIds.contains(mostRecentSession.sessionId))
         }
 
         lastKnownSessions = currentSessionTimestamps
@@ -280,10 +278,12 @@ class SessionWatcherService(private val project: Project) : Disposable {
      */
     private fun tryAutoBindOrUpdateSession(
         session: com.github.jendalen.claudesessionmanager.model.ClaudeSession,
-        bindingService: BindingService,
         isNewSession: Boolean
     ) {
-        // Run on EDT to access UI components
+        // Run on EDT to access UI components. All binding rules (stable id, persistent
+        // name, suppression window, self-heal, adoption) live in TabBindingCoordinator.
+        // This channel is heuristic (most-recently-modified session), so it may only
+        // create a binding for genuinely new sessions (allowCreate = isNewSession).
         ApplicationManager.getApplication().invokeLater {
             try {
                 val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return@invokeLater
@@ -291,53 +291,15 @@ class SessionWatcherService(private val project: Project) : Disposable {
                 // The terminal might not be the active tool window but selectedContent
                 // is still valid from the user's last interaction.
 
-                val contentManager = toolWindow.contentManager
-                val selectedContent = contentManager.selectedContent ?: return@invokeLater
+                val selectedContent = toolWindow.contentManager.selectedContent ?: return@invokeLater
 
-                // Skip team-managed tabs - v2.0 handles their binding
-                if (TerminalHelper.isTeamTab(selectedContent)) return@invokeLater
-
-                val tabName = selectedContent.displayName ?: return@invokeLater
-
-                val tabIdentifier = com.github.jendalen.claudesessionmanager.model.TabIdentifier(
-                    name = tabName,
-                    createdAt = System.currentTimeMillis(),
-                    shellPid = null,
-                    workingDirectory = null
+                TabBindingCoordinator.getInstance(project).bindOrUpdate(
+                    content = selectedContent,
+                    sessionId = session.sessionId,
+                    source = "index-watch",
+                    displayInfo = session.displaySummary(),
+                    allowCreate = isNewSession
                 )
-
-                val existingBinding = bindingService.findBindingForTab(tabIdentifier)
-
-                if (existingBinding != null) {
-                    // Tab is already bound
-                    if (existingBinding.currentSessionId != session.sessionId) {
-                        // Session changed (e.g., /resume or /clear)
-                        bindingService.updateBindingSession(existingBinding.id, session.sessionId)
-                        logger.info("Auto-updated binding for tab '$tabName' to session ${session.sessionId} (was: ${existingBinding.currentSessionId})")
-
-                        val settings = SettingsService.getInstance()
-                        if (settings.notifyOnSessionChange) {
-                            showNotification(
-                                "Session changed in '$tabName'",
-                                "Updated to: ${session.displaySummary()}",
-                                NotificationType.INFORMATION
-                            )
-                        }
-                    }
-                } else if (isNewSession) {
-                    // New session and no binding - create one
-                    bindingService.createBinding(tabIdentifier, session.sessionId)
-                    logger.info("Auto-bound new session ${session.sessionId} to tab '$tabName'")
-
-                    // Set Claude icon
-                    TerminalHelper.setClaudeIconOnContent(selectedContent)
-
-                    showNotification(
-                        "Claude session detected",
-                        "Auto-bound '$tabName' to: ${session.displaySummary()}",
-                        NotificationType.INFORMATION
-                    )
-                }
             } catch (e: Exception) {
                 logger.warn("Failed to auto-bind/update session: ${e.message}", e)
             }
@@ -364,10 +326,6 @@ class SessionWatcherService(private val project: Project) : Disposable {
     private fun refreshKnownSessions() {
         val sessions = ClaudeSessionService.getInstance(project).getSessions()
         lastKnownSessions = sessions.associate { it.sessionId to it.fileMtime }
-    }
-
-    private fun showNotification(title: String, content: String, type: NotificationType) {
-        NotificationHelper.show(project, title, content, type)
     }
 
     override fun dispose() {

@@ -37,10 +37,10 @@ data class TabIdentifier(
 ) {
     /**
      * The name to use for cross-restart matching: the terminal-persisted name when known,
-     * else the (possibly volatile) display name snapshot.
+     * else the (possibly volatile) display name snapshot. Blank persistent names are ignored.
      */
     val effectiveName: String
-        get() = persistentName ?: name
+        get() = persistentName?.takeUnless { it.isBlank() } ?: name
     /**
      * Calculates match confidence against another TabIdentifier.
      * Returns value between 0.0 and 1.0.

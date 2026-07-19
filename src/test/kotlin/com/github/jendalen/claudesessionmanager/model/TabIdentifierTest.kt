@@ -110,6 +110,15 @@ class TabIdentifierTest {
     }
 
     @Test
+    fun `blank persistent name falls back to display name`() {
+        val a = TabIdentifier(name = "build", createdAt = 0, persistentName = "")
+        val b = TabIdentifier(name = "build", createdAt = 0)
+        // A blank persistentName must not be treated as an authoritative (empty) identity.
+        assertTrue(a.matchConfidence(b) >= TabIdentifier.HIGH_CONFIDENCE_THRESHOLD)
+        assertEquals("build", a.effectiveName)
+    }
+
+    @Test
     fun `stale uuid mismatch still returns zero pairwise`() {
         // Pairwise semantics unchanged: services resolve stale uuids before matching
         // (BindingMigrationService re-attaches by persistent name on startup).

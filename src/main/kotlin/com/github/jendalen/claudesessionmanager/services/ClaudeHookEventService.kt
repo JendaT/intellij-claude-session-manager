@@ -1,9 +1,6 @@
 package com.github.jendalen.claudesessionmanager.services
 
-import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
-import com.github.jendalen.claudesessionmanager.util.NotificationHelper
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -46,18 +43,15 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     @Volatile
     private var lastProcessedTimestamp: Long = 0
 
-    // Suppression window: during auto-resume, don't update existing bindings
-    // (auto-resume already has the correct binding from persistence)
-    @Volatile
-    private var autoResumeSuppressUntil: Long = 0
-
     // Constants for retry delays
     companion object {
         private val RETRY_DELAYS_MS = listOf(1000L, 2000L, 5000L, 10000L)
         private const val FILE_WRITE_DELAY_MS = 50L
-        private const val FILE_RECHECK_DELAY_MS = 200L
         private const val POLL_INTERVAL_SECONDS = 5
-        private const val AUTO_RESUME_SUPPRESS_BUFFER_MS = 15000L
+
+        // Guard rails for the untrusted event file
+        private const val MAX_EVENT_FILE_BYTES = 64 * 1024L
+        private const val MAX_TIMESTAMP_SKEW_MS = 60_000L
 
         fun getInstance(project: Project): ClaudeHookEventService {
             return project.getService(ClaudeHookEventService::class.java)
@@ -108,22 +102,25 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                     while (!Thread.currentThread().isInterrupted && isWatching) {
                         val key = watchService?.poll(1, java.util.concurrent.TimeUnit.SECONDS)
                         if (key != null) {
+                            // Coalesce: one write typically produces CREATE plus one or more
+                            // MODIFY events - process the file once per batch, not per event.
+                            var matched = false
                             for (event in key.pollEvents()) {
                                 val kind = event.kind()
                                 if (kind == StandardWatchEventKinds.OVERFLOW) continue
 
                                 val filename = event.context() as? Path
                                 if (filename?.toString() == "current-session.json") {
-                                    logger.debug("Detected change in current-session.json")
-                                    // Small delay to ensure file write is complete (events can fire rapidly)
-                                    Thread.sleep(FILE_WRITE_DELAY_MS)
-                                    processSessionEvent(eventFile)
-                                    // Check again after a short delay in case another write happened
-                                    Thread.sleep(FILE_RECHECK_DELAY_MS)
-                                    processSessionEvent(eventFile)
+                                    matched = true
                                 }
                             }
                             key.reset()
+                            if (matched) {
+                                logger.debug("Detected change in current-session.json")
+                                // Small delay to ensure file write is complete
+                                Thread.sleep(FILE_WRITE_DELAY_MS)
+                                processSessionEvent(eventFile)
+                            }
                         }
 
                         // Periodic fallback poll every POLL_INTERVAL_SECONDS to catch any missed events
@@ -161,6 +158,12 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 return
             }
 
+            // The event file is untrusted input; refuse absurd sizes before reading.
+            if (eventFile.length() > MAX_EVENT_FILE_BYTES) {
+                logger.warn("Session event file too large (${eventFile.length()} bytes), ignoring")
+                return
+            }
+
             val content = eventFile.readText().trim()
             if (content.isEmpty()) {
                 logger.debug("Session event file is empty")
@@ -174,7 +177,9 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 logger.debug("Skipping already processed event: ${event.sessionId}")
                 return
             }
+            // Clamp: a corrupt far-future timestamp must not wedge event processing forever.
             lastProcessedTimestamp = event.timestamp
+                .coerceAtMost(System.currentTimeMillis() + MAX_TIMESTAMP_SKEW_MS)
 
             logger.info("Processing session event: sessionId=${event.sessionId}, source=${event.source}, cwd=${event.cwd}")
 
@@ -247,6 +252,8 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     /**
      * Binds the session to the currently focused terminal tab.
      * Session metadata is optional - binding works with just the session ID.
+     * All binding rules (suppression, self-heal, adoption, create) live in
+     * [TabBindingCoordinator]; this method only resolves the focused tab.
      */
     private fun bindToFocusedTerminal(
         sessionId: String,
@@ -267,95 +274,19 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 // could be focused), but selectedContent is still valid from the user's
                 // last interaction with the terminal tab.
 
-                val contentManager = toolWindow.contentManager
-                val selectedContent = contentManager.selectedContent
+                val selectedContent = toolWindow.contentManager.selectedContent
                 if (selectedContent == null) {
                     logger.info("Auto-bind skipped: No terminal tab selected (project=${project.name}, session=$sessionId, source=$source)")
                     return@invokeLater
                 }
 
-                // Skip team-managed tabs - v2.0 handles their binding
-                if (TerminalHelper.isTeamTab(selectedContent)) {
-                    logger.info("Auto-bind skipped: Team-managed tab (project=${project.name}, session=$sessionId, source=$source)")
-                    return@invokeLater
-                }
-
-                val tabName = selectedContent.displayName
-                if (tabName.isNullOrBlank()) {
-                    logger.info("Auto-bind skipped: Terminal tab has no/blank display name (project=${project.name}, session=$sessionId, source=$source)")
-                    return@invokeLater
-                }
-
-                // Stable id makes the binding independent of Claude Code's tab renaming.
-                val tabId = TerminalHelper.getOrCreateTabId(selectedContent)
-                // Terminal-persisted name is the identity that survives IDE restarts.
-                val persistentName = TerminalHelper.getPersistentName(project, selectedContent)
-
-                val tabIdentifier = TabIdentifier(
-                    name = tabName,
-                    createdAt = System.currentTimeMillis(),
-                    shellPid = null,
+                TabBindingCoordinator.getInstance(project).bindOrUpdate(
+                    content = selectedContent,
+                    sessionId = sessionId,
+                    source = source,
                     workingDirectory = cwd.ifBlank { null },
-                    tabUuid = tabId,
-                    persistentName = persistentName
+                    displayInfo = session?.displaySummary()
                 )
-
-                val bindingService = BindingService.getInstance(project)
-                val existingBinding = bindingService.findBindingForTab(tabIdentifier)
-
-                val settings = SettingsService.getInstance()
-                val displayInfo = session?.displaySummary() ?: "${sessionId.take(8)}..."
-
-                if (existingBinding != null) {
-                    // Self-heal legacy (name-only) bindings by pinning them to the stable tab id.
-                    if (existingBinding.tabIdentifier.tabUuid == null) {
-                        bindingService.attachTabUuid(existingBinding.id, tabId, persistentName)
-                    } else if (persistentName != null &&
-                        existingBinding.tabIdentifier.persistentName != persistentName) {
-                        // Keep the restart-stable name in sync (covers older bindings without
-                        // one and tabs renamed since the binding was created).
-                        bindingService.updatePersistentName(existingBinding.id, persistentName)
-                    }
-
-                    // During auto-resume window, don't update existing bindings.
-                    // Auto-resume already has the correct session from persistence.
-                    // Hook events during this window are side-effects of the resume
-                    // (startup + resume events interleave and cause binding flip-flop).
-                    val isSuppressed = System.currentTimeMillis() < autoResumeSuppressUntil
-                    if (isSuppressed) {
-                        logger.info("Hook event suppressed during auto-resume window: session=$sessionId, tab='$tabName', source=$source")
-                    } else if (!existingBinding.currentSessionId.equals(sessionId, ignoreCase = true)) {
-                        bindingService.updateBindingSession(existingBinding.id, sessionId)
-                        logger.info("Auto-updated binding for '$tabName' from ${existingBinding.currentSessionId} to $sessionId (source=$source)")
-
-                        if (settings.notifyOnAutoDetection) {
-                            showNotification(
-                                "Session changed in '$tabName'",
-                                "Updated to: $displayInfo (via $source)",
-                                NotificationType.INFORMATION
-                            )
-                        }
-                    } else {
-                        logger.info("Session $sessionId already bound to '$tabName' (source=$source)")
-                    }
-                } else {
-                    // Create a new binding - the hook event tells us Claude started/resumed
-                    // in the currently focused terminal tab
-                    bindingService.createBinding(tabIdentifier, sessionId)
-                    logger.info("Auto-bound tab '$tabName' to session $sessionId (source=$source)")
-
-                    // Set Claude icon
-                    TerminalHelper.setClaudeIconOnContent(selectedContent)
-                    TerminalHelper.protectTabTitleIfEnabled(project, selectedContent)
-
-                    if (settings.notifyOnAutoDetection) {
-                        showNotification(
-                            "Claude session detected",
-                            "Auto-bound '$tabName' to: $displayInfo (via $source)",
-                            NotificationType.INFORMATION
-                        )
-                    }
-                }
             } catch (e: Exception) {
                 logger.warn("Failed to bind to focused terminal: ${e.message}", e)
             }
@@ -379,17 +310,6 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     }
 
     /**
-     * Activates the auto-resume suppression window.
-     * During this window, hook events will not update existing bindings
-     * (only create new ones). This prevents binding flip-flop during
-     * multi-tab auto-resume on IDE startup.
-     */
-    fun suppressForAutoResume() {
-        autoResumeSuppressUntil = System.currentTimeMillis() + AUTO_RESUME_SUPPRESS_BUFFER_MS
-        logger.info("Auto-resume suppression window active for ${AUTO_RESUME_SUPPRESS_BUFFER_MS}ms")
-    }
-
-    /**
      * Checks if two paths have a directory containment relationship.
      * Unlike string prefix matching, this ensures the match is at a directory boundary.
      * e.g., /foo/bar matches /foo/bar/baz but NOT /foo/bar-other
@@ -399,10 +319,6 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         val normalizedProject = projectPath.trimEnd('/')
         return normalizedCwd == normalizedProject ||
                normalizedCwd.startsWith("$normalizedProject/")
-    }
-
-    private fun showNotification(title: String, content: String, type: NotificationType) {
-        NotificationHelper.show(project, title, content, type)
     }
 
     override fun dispose() {

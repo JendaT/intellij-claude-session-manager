@@ -20,18 +20,19 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Project-level service for managing session bindings.
  *
- * Bindings are stored in .idea/claudeSessionManager.xml.
- * This allows bindings to be optionally shared via VCS.
+ * Bindings are stored in the project's workspace file (.idea/workspace.xml),
+ * which is per-machine and not intended for VCS sharing.
  */
 @Service(Service.Level.PROJECT)
 @State(
     name = "ClaudeSessionBindings",
     storages = [Storage(StoragePathMacros.WORKSPACE_FILE)]
 )
-class BindingService(private val project: Project) : PersistentStateComponent<BindingService.BindingsState> {
+class BindingService(private val project: Project) :
+    PersistentStateComponent<BindingService.BindingsState>, com.intellij.openapi.Disposable {
 
     private val logger = Logger.getInstance(BindingService::class.java)
-    private val saveAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD)
+    private val saveAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     /**
      * Serializable state for XML persistence.
@@ -39,8 +40,6 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
     class BindingsState {
         @XCollection(style = XCollection.Style.v2)
         var bindings: MutableList<BindingEntry> = mutableListOf()
-
-        var schemaVersion: Int = CURRENT_SCHEMA_VERSION
     }
 
     /**
@@ -259,6 +258,37 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
     }
 
     /**
+     * Finds the single binding that is not attached to any live tab (its tabUuid is null or
+     * matches none of [liveTabIds]) and whose restart-stable name equals [effectiveName].
+     * Returns null when there is no such binding or when several match (ambiguous - never guess).
+     *
+     * Used for adoption: when a session event arrives on a tab that has no binding yet, a
+     * matching restart-stale binding is re-attached instead of creating a duplicate.
+     */
+    fun findStaleBindingByName(effectiveName: String, liveTabIds: Set<String>): SessionBinding? {
+        val candidates = bindingsCache.values.filter {
+            (it.tabIdentifier.tabUuid == null || it.tabIdentifier.tabUuid !in liveTabIds) &&
+                it.tabIdentifier.effectiveName == effectiveName
+        }
+        return candidates.singleOrNull()
+    }
+
+    /**
+     * Repairs a binding's tab identity in place: attaches the stable id when missing and
+     * keeps the terminal-persisted name in sync. No-op when nothing changed.
+     */
+    fun selfHealIdentity(bindingId: String, tabUuid: String, persistentName: String?): SessionBinding? {
+        val binding = bindingsCache[bindingId] ?: return null
+        return if (binding.tabIdentifier.tabUuid == null) {
+            attachTabUuid(bindingId, tabUuid, persistentName)
+        } else if (persistentName != null && binding.tabIdentifier.persistentName != persistentName) {
+            updatePersistentName(bindingId, persistentName)
+        } else {
+            binding
+        }
+    }
+
+    /**
      * Updates the terminal-persisted tab name on a binding (e.g. after the user renames the
      * tab). Keeps cross-restart matching in sync with what the terminal will persist.
      */
@@ -342,24 +372,11 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
         )
     }
 
-    /**
-     * The persisted schema version of the currently loaded state.
-     * Used by BindingMigrationService to decide whether a one-time migration is needed.
-     */
-    fun loadedSchemaVersion(): Int = state.schemaVersion
-
-    /**
-     * Marks the loaded state as migrated to the current schema version and flushes.
-     */
-    fun markSchemaCurrent() {
-        if (state.schemaVersion != CURRENT_SCHEMA_VERSION) {
-            state.schemaVersion = CURRENT_SCHEMA_VERSION
-            syncToState()
-        }
+    override fun dispose() {
+        // saveAlarm is disposed automatically (parented to this service)
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
         private const val SAVE_DEBOUNCE_MS = 200
 
         fun getInstance(project: Project): BindingService {

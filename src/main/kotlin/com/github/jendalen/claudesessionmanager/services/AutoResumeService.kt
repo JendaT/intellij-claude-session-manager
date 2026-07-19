@@ -7,21 +7,26 @@ import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.util.Disposer
-import com.intellij.util.Alarm
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.EDT
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
+import com.intellij.openapi.util.Disposer
+import com.intellij.ui.content.Content
+import com.intellij.util.Alarm
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
- * Startup activity that auto-resumes Claude sessions when the IDE starts.
+ * Startup activity that re-attaches bindings to restored terminal tabs and auto-resumes
+ * Claude sessions.
  *
- * For each binding with autoResume=true:
- * 1. Wait for terminal plugin to initialize
- * 2. Find terminal tab by name
- * 3. Resume the bound session
+ * Binding re-attachment (BindingMigrationService) runs regardless of the auto-resume
+ * setting - the restart-stable identity must not depend on auto-resume being enabled.
+ * Terminal tabs restore asynchronously, so the migration is retried until every binding
+ * found its tab or no progress is being made.
  */
 class AutoResumeService : ProjectActivity {
 
@@ -29,43 +34,30 @@ class AutoResumeService : ProjectActivity {
 
     companion object {
         // Terminal tabs are restored asynchronously after project open; keep re-trying the
-        // binding re-attachment until they show up, within this budget.
+        // binding re-attachment until they show up, within this budget. Stop early when
+        // consecutive polls make no progress (bindings whose tab is gone would otherwise
+        // burn the whole budget on every startup).
         private const val TAB_RESTORE_WAIT_BUDGET_MS = 15000L
         private const val TAB_RESTORE_POLL_MS = 500L
+        private const val MAX_STAGNANT_POLLS = 4
     }
+
+    private enum class ResumeOutcome { RESUMED, MISSING, FAILED }
 
     override suspend fun execute(project: Project) {
         val settings = SettingsService.getInstance()
 
-        // Check if auto-resume is enabled
+        val delayMs = settings.autoResumeDelayMs
+        logger.info("Binding re-attachment starts after ${delayMs}ms delay (autoResume=${settings.autoResumeEnabled})")
+        delay(delayMs)
+
+        // Re-attach bindings to restored tabs on both paths.
+        waitForTabRestorationAndMigrate(project)
+
         if (!settings.autoResumeEnabled) {
             logger.info("Auto-resume disabled in settings")
-            // Still migrate legacy bindings and start the session watcher.
-            runMigration(project)
             startSessionWatcher(project)
             return
-        }
-
-        // Get the configured delay
-        val delayMs = settings.autoResumeDelayMs
-        logger.info("Auto-resume will start after ${delayMs}ms delay")
-
-        // Wait for terminal to initialize
-        delay(delayMs.toLong())
-
-        // Re-attach bindings to restored tabs (stable ids do not survive restart; matching is
-        // by the terminal-persisted tab name). Tabs are restored asynchronously by the
-        // terminal plugin, so retry until every binding found its tab or the budget runs out.
-        runMigration(project)
-        val migrationService = BindingMigrationService.getInstance(project)
-        var waited = 0L
-        while (migrationService.unattachedBindings().isNotEmpty() && waited < TAB_RESTORE_WAIT_BUDGET_MS) {
-            delay(TAB_RESTORE_POLL_MS)
-            waited += TAB_RESTORE_POLL_MS
-            runMigration(project)
-        }
-        if (waited > 0) {
-            logger.info("Auto-resume waited additional ${waited}ms for terminal tab restoration")
         }
 
         // Get bindings that need auto-resume
@@ -80,12 +72,12 @@ class AutoResumeService : ProjectActivity {
 
         logger.info("Found ${bindings.size} bindings to auto-resume")
 
-        // Activate suppression window on the hook event service BEFORE sending resume commands.
-        // This prevents hook events from flip-flopping bindings during multi-tab auto-resume.
+        // Activate the suppression window BEFORE sending resume commands. This prevents
+        // hook events from flip-flopping bindings during multi-tab auto-resume.
         try {
-            ClaudeHookEventService.getInstance(project).suppressForAutoResume()
+            TabBindingCoordinator.getInstance(project).suppressForAutoResume()
         } catch (e: Exception) {
-            logger.warn("Failed to set auto-resume suppression: ${e.message}")
+            logger.warn("Failed to set auto-resume suppression: ${e.message}", e)
         }
 
         // Track results
@@ -95,62 +87,10 @@ class AutoResumeService : ProjectActivity {
 
         // Resume each binding
         for (binding in bindings) {
-            val tabName = binding.tabIdentifier.name
-            val persistentName = binding.tabIdentifier.persistentName ?: tabName
-            val tabUuid = binding.tabIdentifier.tabUuid
-
-            // Prefer matching by stable tab id (set this startup by migration); fall back to
-            // the terminal-persisted name, then the volatile display name.
-            val toolWindow = TerminalHelper.getTerminalToolWindow(project)
-            var terminalView = tabUuid?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
-            var content = tabUuid?.let { TerminalHelper.findContentByTabId(project, it) }
-            if (terminalView == null && content == null) {
-                content = toolWindow?.contentManager?.contents?.find {
-                    TerminalHelper.getPersistentName(project, it) == persistentName
-                } ?: toolWindow?.contentManager?.contents?.find { it.displayName == tabName }
-                terminalView = content?.let { c ->
-                    TerminalHelper.findTerminalViewByTabId(project, TerminalHelper.getOrCreateTabId(c))
-                } ?: TerminalHelper.findTerminalViewByTabName(project, tabName)
-            }
-            // Resolve the id we will target with the command (the tab's actual current id).
-            val resolvedTabId = content?.let { TerminalHelper.getTabId(it) } ?: tabUuid
-
-            if (terminalView == null && content == null) {
-                logger.info("Terminal tab '$tabName' not found - adding to missing list")
-                missingBindings.add(binding)
-                continue
-            }
-
-            // Create context for the tab
-            val context = TerminalTabContext(
-                tabName = tabName,
-                terminalView = terminalView,
-                shellWidget = TerminalHelper.findWidgetByName(project, tabName),
-                content = content,
-                tabId = resolvedTabId
-            )
-
-            // Resume the session
-            try {
-                val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
-                if (success) {
-                    bindingService.markBindingResumed(binding.id)
-                    // Set icon and title protection on EDT
-                    content?.let { c ->
-                        ApplicationManager.getApplication().invokeLater {
-                            TerminalHelper.setClaudeIconOnContent(c)
-                            TerminalHelper.protectTabTitleIfEnabled(project, c)
-                        }
-                    }
-                    resumedCount++
-                    logger.info("Auto-resumed session ${binding.currentSessionId} in tab '$tabName'")
-                } else {
-                    failedCount++
-                    logger.warn("Failed to resume session ${binding.currentSessionId} in tab '$tabName'")
-                }
-            } catch (e: Exception) {
-                failedCount++
-                logger.error("Error resuming session ${binding.currentSessionId}: ${e.message}", e)
+            when (resumeBinding(project, binding, bindingService)) {
+                ResumeOutcome.RESUMED -> resumedCount++
+                ResumeOutcome.MISSING -> missingBindings.add(binding)
+                ResumeOutcome.FAILED -> failedCount++
             }
         }
 
@@ -172,17 +112,119 @@ class AutoResumeService : ProjectActivity {
     }
 
     /**
-     * Runs the legacy-binding migration synchronously on the EDT so that bindings carry their
-     * stable tab id before the resume loop (which matches tabs by that id) executes.
+     * Repeatedly runs the binding re-attachment on the EDT while terminal tabs are being
+     * restored. Exits when all bindings are attached, when consecutive polls stop making
+     * progress, or when the time budget runs out.
      */
-    private fun runMigration(project: Project) {
+    private suspend fun waitForTabRestorationAndMigrate(project: Project) {
+        val migrationService = BindingMigrationService.getInstance(project)
+        var waited = 0L
+        var stagnantPolls = 0
+        var lastPending = Int.MAX_VALUE
+
+        while (waited < TAB_RESTORE_WAIT_BUDGET_MS) {
+            val pending = try {
+                withContext(Dispatchers.EDT) {
+                    migrationService.migrate()
+                    migrationService.unattachedBindings().size
+                }
+            } catch (e: Exception) {
+                logger.warn("Binding migration failed: ${e.message}", e)
+                return
+            }
+
+            if (pending == 0) return
+
+            stagnantPolls = if (pending >= lastPending) stagnantPolls + 1 else 0
+            if (stagnantPolls >= MAX_STAGNANT_POLLS) {
+                logger.info("$pending binding(s) still unattached after ${waited}ms with no progress - continuing without them")
+                return
+            }
+            lastPending = pending
+
+            delay(TAB_RESTORE_POLL_MS)
+            waited += TAB_RESTORE_POLL_MS
+        }
+        logger.info("Tab-restoration wait budget exhausted (${TAB_RESTORE_WAIT_BUDGET_MS}ms)")
+    }
+
+    /**
+     * Resolves the terminal tab for a binding and sends the resume command. Runs entirely
+     * on the EDT - tab resolution touches ToolWindow/ContentManager/tabs-manager state.
+     */
+    private suspend fun resumeBinding(
+        project: Project,
+        binding: SessionBinding,
+        bindingService: BindingService
+    ): ResumeOutcome = withContext(Dispatchers.EDT) {
+        val targetName = binding.tabIdentifier.effectiveName
         try {
-            ApplicationManager.getApplication().invokeAndWait {
-                BindingMigrationService.getInstance(project).migrate()
+            val content = resolveContentForBinding(project, binding, bindingService)
+            if (content == null) {
+                logger.info("Terminal tab '$targetName' not found (or ambiguous) - adding to missing list")
+                return@withContext ResumeOutcome.MISSING
+            }
+
+            val displayName = content.displayName ?: targetName
+            val tabId = TerminalHelper.getTabId(content)
+            val terminalView = tabId?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
+                ?: TerminalHelper.findTerminalViewByTabName(project, displayName)
+
+            val context = TerminalTabContext(
+                tabName = displayName,
+                terminalView = terminalView,
+                shellWidget = TerminalHelper.findWidgetByName(project, displayName),
+                content = content,
+                tabId = tabId,
+                persistentName = binding.tabIdentifier.persistentName
+            )
+
+            val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
+            if (success) {
+                bindingService.markBindingResumed(binding.id)
+                TerminalHelper.setClaudeIconOnContent(content)
+                TerminalHelper.protectTabTitleIfEnabled(project, content)
+                logger.info("Auto-resumed session ${binding.currentSessionId} in tab '$displayName'")
+                ResumeOutcome.RESUMED
+            } else {
+                logger.warn("Failed to resume session ${binding.currentSessionId} in tab '$displayName'")
+                ResumeOutcome.FAILED
             }
         } catch (e: Exception) {
-            logger.warn("Binding migration failed: ${e.message}", e)
+            logger.error("Error resuming session ${binding.currentSessionId}: ${e.message}", e)
+            ResumeOutcome.FAILED
         }
+    }
+
+    /**
+     * Finds the tab Content a binding refers to. Prefers the stable tab id; falls back to an
+     * UNAMBIGUOUS match on the terminal-persisted name (mirroring the migration's rules -
+     * with several same-named tabs we never guess). A successful fallback match re-attaches
+     * the binding to the tab's live id so tab and binding agree from then on.
+     */
+    private fun resolveContentForBinding(
+        project: Project,
+        binding: SessionBinding,
+        bindingService: BindingService
+    ): Content? {
+        binding.tabIdentifier.tabUuid?.let { uuid ->
+            TerminalHelper.findContentByTabId(project, uuid)?.let { return it }
+        }
+
+        val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return null
+        val targetName = binding.tabIdentifier.effectiveName
+        val titleNames = TerminalHelper.persistentNamesSnapshot(project)
+        val candidates = toolWindow.contentManager.contents
+            .filterNot { TerminalHelper.isTeamTab(it) }
+            .filter { (titleNames[it] ?: it.displayName) == targetName }
+
+        val content = candidates.singleOrNull() ?: return null
+        val liveId = TerminalHelper.getOrCreateTabId(content)
+        val claimedBy = bindingService.findBindingByTabUuid(liveId)
+        if (claimedBy != null && claimedBy.id != binding.id) return null
+
+        bindingService.attachTabUuid(binding.id, liveId, titleNames[content] ?: targetName)
+        return content
     }
 
     private fun startSessionWatcher(project: Project) {
@@ -224,7 +266,7 @@ class AutoResumeService : ProjectActivity {
         missingBindings: List<SessionBinding>,
         bindingService: BindingService
     ) {
-        val tabNames = missingBindings.map { it.tabIdentifier.name }
+        val tabNames = missingBindings.map { it.tabIdentifier.effectiveName }
         val message = if (missingBindings.size == 1) {
             "Tab '${tabNames[0]}' not found"
         } else {
@@ -239,7 +281,7 @@ class AutoResumeService : ProjectActivity {
         notification.addAction(NotificationAction.createSimple("Dismiss (remove bindings)") {
             for (binding in missingBindings) {
                 bindingService.deleteBinding(binding.id)
-                logger.info("Removed binding for missing tab '${binding.tabIdentifier.name}'")
+                logger.info("Removed binding for missing tab '${binding.tabIdentifier.effectiveName}'")
             }
             notification.expire()
             showNotification(project, "${missingBindings.size} binding${if (missingBindings.size > 1) "s" else ""} removed", NotificationType.INFORMATION)
@@ -260,7 +302,7 @@ class AutoResumeService : ProjectActivity {
         var createdCount = 0
 
         for (binding in missingBindings) {
-            val tabName = binding.tabIdentifier.name
+            val tabName = binding.tabIdentifier.effectiveName
             try {
                 // Try to create a new terminal tab with the original name
                 val widget = TerminalHelper.createNewTerminalTab(project, tabName)
@@ -280,13 +322,19 @@ class AutoResumeService : ProjectActivity {
                                     tabName = tabName,
                                     terminalView = terminalView,
                                     shellWidget = widget,
-                                    content = content
+                                    content = content,
+                                    tabId = content?.let { TerminalHelper.getOrCreateTabId(it) },
+                                    persistentName = tabName
                                 )
                                 val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
                                 if (success) {
                                     val bindingService = BindingService.getInstance(project)
+                                    context.tabId?.let { bindingService.attachTabUuid(binding.id, it, tabName) }
                                     bindingService.markBindingResumed(binding.id)
-                                    content?.let { TerminalHelper.setClaudeIconOnContent(it) }
+                                    content?.let {
+                                        TerminalHelper.setClaudeIconOnContent(it)
+                                        TerminalHelper.protectTabTitleIfEnabled(project, it)
+                                    }
                                     logger.info("Recreated and resumed tab '$tabName'")
                                 }
                             }
@@ -309,6 +357,6 @@ class AutoResumeService : ProjectActivity {
     }
 
     private fun showNotification(project: Project, message: String, type: NotificationType) {
-        NotificationHelper.show(project, "Claude Sessions", message, type)
+        NotificationHelper.show(project, message, type)
     }
 }

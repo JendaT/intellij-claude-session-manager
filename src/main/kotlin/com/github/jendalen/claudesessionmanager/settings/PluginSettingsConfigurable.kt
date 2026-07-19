@@ -310,6 +310,7 @@ class PluginSettingsConfigurable : Configurable {
         panel?.apply()
 
         val delayMs = autoResumeDelayMs.toLongOrNull() ?: PluginSettings.DEFAULT.autoResumeDelayMs
+        val protectTabNamesChanged = protectTabNames != settingsService.protectTabNames
 
         settingsService.updateSettings(
             settingsService.getSettings().copy(
@@ -327,6 +328,19 @@ class PluginSettingsConfigurable : Configurable {
 
         // Notify the guard service so it can act immediately if just enabled
         OptionAsMetaKeyGuardService.getInstance().onGuardSettingChanged(forceOptionAsMetaKeyOff)
+
+        // Apply/undo title protection on already-bound tabs immediately - otherwise the
+        // toggle only takes effect on the next session event, which reads as broken.
+        if (protectTabNamesChanged) {
+            for (project in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) {
+                try {
+                    com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
+                        .updateTitleProtectionForBoundTabs(project, protectTabNames)
+                } catch (e: Exception) {
+                    // Non-fatal: protection still applies lazily on the next session event
+                }
+            }
+        }
 
         // Apply the Claude Code tab-title toggle to ~/.claude/settings.json if it changed.
         if (disableClaudeTabTitle != titleSettings.isTitleDisabled()) {
