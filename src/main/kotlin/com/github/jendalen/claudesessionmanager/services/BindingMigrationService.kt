@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.services
 
+import com.github.jendalen.claudesessionmanager.model.SessionBinding
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -8,24 +9,21 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.content.Content
 
 /**
- * One-time, idempotent migration of legacy (name-only) session bindings onto the stable
- * per-tab id model introduced alongside Claude Code's terminal-title takeover.
+ * Idempotent re-attachment of session bindings to live terminal tabs. Runs on every startup
+ * (and is safe to re-run at any time). Two phases:
  *
- * Background: bindings used to be matched to terminal tabs by the tab's displayName. Recent
- * JetBrains builds honor the OSC-0 escape sequence Claude Code emits, which renames every
- * Claude tab to "Claude Code". That collapses distinct tabs to one name, breaking name-based
- * matching. The new model keys on a stable UUID stored in the tab's Content UserData
- * (see [TerminalHelper.STABLE_TAB_KEY]).
+ * 1. LEGACY: bindings with no [tabUuid] (created before the stable-id model) are matched to
+ *    open tabs by name and stamped with a stable id.
  *
- * A binding is "legacy" if its [tabUuid] is null. For each legacy binding this migration tries
- * to find the currently-open terminal tab it refers to (by displayName, unambiguously) and
- * stamps a freshly-generated stable id onto both the live tab's Content and the persisted
- * binding, so subsequent matching is name-independent.
+ * 2. RESTART REBIND: the stable id lives in the tab's Content UserData, which does NOT
+ *    survive an IDE restart. Bindings whose tabUuid matches no open tab are re-attached by
+ *    the terminal-persisted tab name ([TerminalHelper.getPersistentName]) - the name the
+ *    terminal plugin itself stores in TerminalTabsStorage and restores tabs with. That name
+ *    is never polluted by Claude Code's OSC title takeover, unlike the displayName.
  *
- * Bindings that cannot be matched unambiguously are left untouched and keep working via the
- * name-based fallback in [com.github.jendalen.claudesessionmanager.model.TabIdentifier.matchConfidence].
- * Because the trigger is "tabUuid == null", the migration safely re-runs on later startups for
- * any binding it could not match yet (e.g. its tab was not open at the time).
+ * Matching is only performed when unambiguous (exactly one candidate tab, not claimed by
+ * another binding). Ambiguous or missing tabs are left untouched; the name-based fallback in
+ * [com.github.jendalen.claudesessionmanager.model.TabIdentifier.matchConfidence] still applies.
  */
 @Service(Service.Level.PROJECT)
 class BindingMigrationService(private val project: Project) {
@@ -39,57 +37,92 @@ class BindingMigrationService(private val project: Project) {
     }
 
     /**
-     * Runs the migration. Cheap and idempotent; safe to call on every startup. Must run on EDT
+     * Runs both phases. Cheap and idempotent; safe to call on every startup. Must run on EDT
      * (touches terminal tab Content); callers should wrap with invokeLater if needed.
      */
     fun migrate() {
         val bindingService = BindingService.getInstance(project)
-
-        val legacyBindings = bindingService.getAllBindings().filter { it.tabIdentifier.tabUuid == null }
-        if (legacyBindings.isEmpty()) {
+        val allBindings = bindingService.getAllBindings()
+        if (allBindings.isEmpty()) {
             bindingService.markSchemaCurrent()
             return
         }
 
         val toolWindow = TerminalHelper.getTerminalToolWindow(project)
         if (toolWindow == null) {
-            logger.info("Binding migration deferred: terminal tool window not available yet (${legacyBindings.size} legacy bindings)")
+            logger.info("Binding migration deferred: terminal tool window not available yet (${allBindings.size} bindings)")
             return
         }
 
-        // Tabs not yet claimed by any stable id are migration candidates.
         val openTabs: List<Content> = toolWindow.contentManager.contents
             .filterNot { TerminalHelper.isTeamTab(it) }
             .toList()
-
-        // Count names so we only auto-match when a name is unambiguous among open tabs.
-        val nameCounts = openTabs.groupingBy { it.displayName }.eachCount()
-        val claimedTabIds = bindingService.getAllBindings()
-            .mapNotNull { it.tabIdentifier.tabUuid }
-            .toMutableSet()
-
-        var migrated = 0
-        for (binding in legacyBindings) {
-            val name = binding.tabIdentifier.name
-            if (nameCounts[name] != 1) {
-                // Zero matches (tab gone) or duplicates (e.g. several "Claude Code" tabs):
-                // cannot safely disambiguate. Leave legacy; name fallback still applies.
-                continue
-            }
-            val content = openTabs.firstOrNull {
-                it.displayName == name && (TerminalHelper.getTabId(it)?.let { id -> id !in claimedTabIds } ?: true)
-            } ?: continue
-
-            val tabId = TerminalHelper.getOrCreateTabId(content)
-            if (tabId in claimedTabIds) continue  // already taken by another binding this pass
-            bindingService.attachTabUuid(binding.id, tabId)
-            claimedTabIds.add(tabId)
-            migrated++
-            logger.info("Migrated binding ${binding.id} ('${name}') to stable tab id $tabId")
+        if (openTabs.isEmpty()) {
+            logger.info("Binding migration deferred: no terminal tabs open yet (${allBindings.size} bindings)")
+            return
         }
 
-        logger.info("Binding migration: $migrated of ${legacyBindings.size} legacy bindings matched to open tabs")
+        val liveTabIds = openTabs.mapNotNull { TerminalHelper.getTabId(it) }.toSet()
+        val claimedTabIds = allBindings
+            .mapNotNull { it.tabIdentifier.tabUuid }
+            .filter { it in liveTabIds }
+            .toMutableSet()
+
+        // Persistent names of open tabs (the identity that survives restarts). Names are
+        // unique among open tabs in practice (the terminal's UniqueNameGenerator), but count
+        // them anyway so we never guess on duplicates.
+        val tabPersistentNames: Map<Content, String?> = openTabs.associateWith {
+            TerminalHelper.getPersistentName(project, it)
+        }
+        val nameCounts = tabPersistentNames.values.filterNotNull().groupingBy { it }.eachCount()
+
+        var reattached = 0
+        var legacy = 0
+
+        for (binding in allBindings) {
+            val tabUuid = binding.tabIdentifier.tabUuid
+            if (tabUuid != null && tabUuid in liveTabIds) continue  // already attached to a live tab
+
+            val targetName = binding.tabIdentifier.persistentName ?: binding.tabIdentifier.name
+            if (nameCounts[targetName] != 1) {
+                logger.info(
+                    "Binding ${binding.id} ('$targetName') not re-attached: " +
+                        "${nameCounts[targetName] ?: 0} matching tabs open"
+                )
+                continue
+            }
+
+            val content = tabPersistentNames.entries.firstOrNull { it.value == targetName }?.key ?: continue
+            val liveId = TerminalHelper.getOrCreateTabId(content)
+            if (liveId in claimedTabIds) {
+                logger.info("Binding ${binding.id} ('$targetName') not re-attached: tab already claimed")
+                continue
+            }
+
+            bindingService.attachTabUuid(binding.id, liveId, targetName)
+            claimedTabIds.add(liveId)
+            if (tabUuid == null) legacy++ else reattached++
+            logger.info("Re-attached binding ${binding.id} ('$targetName') to live tab id $liveId (was ${tabUuid ?: "legacy"})")
+        }
+
+        logger.info(
+            "Binding migration: $legacy legacy + $reattached restart-stale bindings re-attached " +
+                "(${allBindings.size} total, ${openTabs.size} open tabs)"
+        )
         bindingService.markSchemaCurrent()
+    }
+
+    /**
+     * Returns bindings that still are not attached to any open tab (used by auto-resume to
+     * decide whether to keep waiting for tab restoration).
+     */
+    fun unattachedBindings(): List<SessionBinding> {
+        val bindingService = BindingService.getInstance(project)
+        val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return bindingService.getAllBindings()
+        val liveTabIds = toolWindow.contentManager.contents
+            .mapNotNull { TerminalHelper.getTabId(it) }
+            .toSet()
+        return bindingService.getAllBindings().filter { it.tabIdentifier.tabUuid !in liveTabIds }
     }
 
     /** Convenience wrapper that ensures the migration runs on the EDT. */

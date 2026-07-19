@@ -38,6 +38,7 @@ class PluginSettingsConfigurable : Configurable {
     private var syncTabNames = settingsService.syncTabNames
     private var customClaudeHomePath = settingsService.customClaudeHomePath ?: ""
     private var forceOptionAsMetaKeyOff = settingsService.forceOptionAsMetaKeyOff
+    private var protectTabNames = settingsService.protectTabNames
 
     // File-backed (~/.claude/settings.json), not a plugin-persisted setting.
     private var disableClaudeTabTitle = titleSettings.isTitleDisabled()
@@ -118,12 +119,20 @@ class PluginSettingsConfigurable : Configurable {
                         .bindSelected(::syncTabNames)
                 }
                 row {
-                    checkBox("Keep my custom tab names (disable Claude Code's tab renaming)")
+                    checkBox("Protect bound tab names in this IDE (ignore Claude Code's renaming)")
+                        .bindSelected(::protectTabNames)
+                        .comment(
+                            "IDE-side: tabs with a session binding ignore the terminal-title escape " +
+                                "sequence Claude Code emits, so your tab names stay put. Does not change " +
+                                "any Claude Code settings."
+                        )
+                }
+                row {
+                    checkBox("Keep my custom tab names everywhere (disable Claude Code's tab renaming globally)")
                         .bindSelected(::disableClaudeTabTitle)
                         .comment(
                             "Sets ${ClaudeTitleSettingsService.ENV_KEY}=1 in ~/.claude/settings.json. " +
-                                "Claude Code renames terminal tabs (to \"Claude Code\" etc.) via a terminal " +
-                                "escape sequence; enable this to keep your own tab names. Session binding works " +
+                                "Affects all terminals (including outside the IDE). Session binding works " +
                                 "either way."
                         )
                 }
@@ -291,6 +300,7 @@ class PluginSettingsConfigurable : Configurable {
                 syncTabNames != settings.syncTabNames ||
                 customClaudeHomePath != (settings.customClaudeHomePath ?: "") ||
                 forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff ||
+                protectTabNames != settings.protectTabNames ||
                 disableClaudeTabTitle != titleSettings.isTitleDisabled()
         }
     }
@@ -310,7 +320,8 @@ class PluginSettingsConfigurable : Configurable {
                 notifyOnAutoDetection = notifyOnAutoDetection,
                 syncTabNames = syncTabNames,
                 customClaudeHomePath = customClaudeHomePath.ifBlank { null },
-                forceOptionAsMetaKeyOff = forceOptionAsMetaKeyOff
+                forceOptionAsMetaKeyOff = forceOptionAsMetaKeyOff,
+                protectTabNames = protectTabNames
             )
         )
 
@@ -339,6 +350,7 @@ class PluginSettingsConfigurable : Configurable {
         syncTabNames = settings.syncTabNames
         customClaudeHomePath = settings.customClaudeHomePath ?: ""
         forceOptionAsMetaKeyOff = settings.forceOptionAsMetaKeyOff
+        protectTabNames = settings.protectTabNames
         disableClaudeTabTitle = titleSettings.isTitleDisabled()
         panel?.reset()
         refreshIntegrationStatus()

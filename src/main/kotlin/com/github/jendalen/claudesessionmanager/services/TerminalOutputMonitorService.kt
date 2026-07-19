@@ -130,6 +130,25 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         }
         content.addPropertyChangeListener(renameListener)
 
+        // Keep the binding's restart-stable persistent name in sync with user renames.
+        // The persistent name is userDefinedTitle ?: defaultTitle - Claude Code's OSC
+        // application-title changes never affect it, so this fires meaningfully only when
+        // the user actually renames the tab (or the default title changes).
+        try {
+            val title = tab.view.title
+            title.addTitleListener(object : com.intellij.terminal.TerminalTitleListener {
+                override fun onTitleChanged(terminalTitle: com.intellij.terminal.TerminalTitle) {
+                    val persistentName = terminalTitle.userDefinedTitle ?: terminalTitle.defaultTitle ?: return
+                    val binding = BindingService.getInstance(project).findBindingByTabUuid(tabId)
+                    if (binding != null && binding.tabIdentifier.persistentName != persistentName) {
+                        BindingService.getInstance(project).updatePersistentName(binding.id, persistentName)
+                    }
+                }
+            }, this)
+        } catch (e: Exception) {
+            logger.debug("Could not attach title listener for '$tabName': ${e.message}")
+        }
+
         try {
             val terminalView = tab.view
             val outputModels = terminalView.outputModels
@@ -364,12 +383,18 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         val bindingService = BindingService.getInstance(project)
 
         // Create tab identifier keyed on the stable tab id (name is informational only).
+        val persistentName = try {
+            tabMonitor.tab.view.title.let { it.userDefinedTitle ?: it.defaultTitle }
+        } catch (e: Exception) {
+            null
+        }
         val tabIdentifier = TabIdentifier(
             name = tabName,
             createdAt = System.currentTimeMillis(),
             shellPid = null,
             workingDirectory = null,
-            tabUuid = tabMonitor.tabId
+            tabUuid = tabMonitor.tabId,
+            persistentName = persistentName
         )
 
         val existingBinding = bindingService.findBindingForTab(tabIdentifier)
@@ -385,7 +410,10 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 // Self-heal: if this matched a legacy (name-only) binding, pin it to the
                 // stable tab id so future matching no longer depends on the volatile name.
                 if (existingBinding.tabIdentifier.tabUuid == null) {
-                    bindingService.attachTabUuid(existingBinding.id, tabMonitor.tabId)
+                    bindingService.attachTabUuid(existingBinding.id, tabMonitor.tabId, persistentName)
+                } else if (persistentName != null &&
+                    existingBinding.tabIdentifier.persistentName != persistentName) {
+                    bindingService.updatePersistentName(existingBinding.id, persistentName)
                 }
 
                 // Update existing binding if session changed
@@ -409,6 +437,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
                 // Set Claude icon
                 TerminalHelper.setClaudeIconOnContent(content)
+                TerminalHelper.protectTabTitleIfEnabled(project, content)
 
                 val settings = SettingsService.getInstance()
                 if (settings.notifyOnAutoDetection) {

@@ -36,6 +36,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         var maxHistoryPerBinding: Int = 20
         var orphanedHistoryRetentionDays: Int = 30
         var forceOptionAsMetaKeyOff: Boolean = false
+        var protectTabNames: Boolean = true
     }
 
     private var state = State()
@@ -60,7 +61,8 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         fileWatcherDebounceMs = state.fileWatcherDebounceMs,
         maxHistoryPerBinding = state.maxHistoryPerBinding,
         orphanedHistoryRetentionDays = state.orphanedHistoryRetentionDays,
-        forceOptionAsMetaKeyOff = state.forceOptionAsMetaKeyOff
+        forceOptionAsMetaKeyOff = state.forceOptionAsMetaKeyOff,
+        protectTabNames = state.protectTabNames
     ).validated()
 
     /**
@@ -79,6 +81,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         state.maxHistoryPerBinding = validated.maxHistoryPerBinding
         state.orphanedHistoryRetentionDays = validated.orphanedHistoryRetentionDays
         state.forceOptionAsMetaKeyOff = validated.forceOptionAsMetaKeyOff
+        state.protectTabNames = validated.protectTabNames
     }
 
     // Convenience accessors
@@ -116,6 +119,10 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
     var forceOptionAsMetaKeyOff: Boolean
         get() = state.forceOptionAsMetaKeyOff
         set(value) { state.forceOptionAsMetaKeyOff = value }
+
+    var protectTabNames: Boolean
+        get() = state.protectTabNames
+        set(value) { state.protectTabNames = value }
 
     companion object {
         fun getInstance(): SettingsService {

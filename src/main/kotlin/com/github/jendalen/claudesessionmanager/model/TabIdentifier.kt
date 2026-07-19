@@ -14,13 +14,17 @@ import kotlinx.serialization.Serializable
  *
  * The Content (and therefore the UserData UUID) does NOT survive an IDE restart. Persisted
  * bindings carry the last-known [tabUuid] but it won't match freshly-created Content after
- * restart; for that case we fall back to the weaker [name] / [workingDirectory] heuristics,
- * and BindingMigrationService re-stamps UUIDs onto restored tabs on first run.
+ * restart. Cross-restart identity relies on [persistentName]: the name the terminal plugin
+ * itself persists per tab (TerminalTitle.userDefinedTitle ?: defaultTitle). Unlike the
+ * volatile displayName - which Claude Code overwrites via OSC-0 ("Claude Code", "* Doing X")
+ * - the persistent name is never polluted by the application title, and restored tabs come
+ * back carrying exactly this name. BindingMigrationService re-attaches bindings to restored
+ * tabs by persistent name and re-stamps fresh UUIDs on first run after restart.
  *
  * Matching strategy (see [matchConfidence]):
  * 1. Both have tabUuid and they match           -> 1.0 (authoritative)
  * 2. Both have tabUuid and they differ          -> 0.0 (definitely different tabs)
- * 3. tabUuid missing on either side             -> fall back to name/time/cwd scoring
+ * 3. tabUuid missing on either side             -> fall back to persistent-name/time/cwd scoring
  */
 @Serializable
 data class TabIdentifier(
@@ -28,8 +32,15 @@ data class TabIdentifier(
     val createdAt: Long,           // Epoch millis when tab was created
     val shellPid: Long? = null,    // Shell process ID (optional)
     val workingDirectory: String? = null,  // Initial CWD (optional)
-    val tabUuid: String? = null    // Stable per-tab UUID (Content UserData); primary identity
+    val tabUuid: String? = null,   // Stable per-tab UUID (Content UserData); primary identity
+    val persistentName: String? = null  // Terminal-persisted tab name; survives IDE restart
 ) {
+    /**
+     * The name to use for cross-restart matching: the terminal-persisted name when known,
+     * else the (possibly volatile) display name snapshot.
+     */
+    val effectiveName: String
+        get() = persistentName ?: name
     /**
      * Calculates match confidence against another TabIdentifier.
      * Returns value between 0.0 and 1.0.
@@ -46,8 +57,9 @@ data class TabIdentifier(
             return if (tabUuid == other.tabUuid) 1.0 else 0.0
         }
 
-        // Fallback: name must match (case-sensitive)
-        if (name != other.name) {
+        // Fallback: persistent name must match (case-sensitive). Uses the terminal-persisted
+        // name when available so Claude Code's OSC display-name takeover cannot break matching.
+        if (effectiveName != other.effectiveName) {
             return 0.0
         }
 

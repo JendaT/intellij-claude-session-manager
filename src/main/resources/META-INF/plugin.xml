@@ -23,6 +23,21 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.0</h3>
+        <ul>
+            <li>Fixed: Session bindings are no longer lost after IDE restart. The stable tab id
+                lives in tab UserData and dies with the IDE process; bindings are now re-attached
+                to restored tabs via the terminal-persisted tab name (the name the terminal plugin
+                itself stores and restores, which Claude Code's title takeover never touches).</li>
+            <li>Fixed: Auto-resume now waits for terminal tabs to finish restoring instead of
+                declaring them missing after a fixed delay.</li>
+            <li>New: "Protect bound tab names" setting (default on) - bound tabs ignore Claude
+                Code's terminal-title escape sequence IDE-side, so custom tab names stay put
+                without changing Claude Code settings.</li>
+            <li>Improved: Bindings track the persisted tab name on user renames, keeping
+                restart matching correct.</li>
+        </ul>
+
         <h3>0.5.0</h3>
         <ul>
             <li>Fixed: Session bindings broke when Claude Code renamed terminal tabs (e.g. all tabs

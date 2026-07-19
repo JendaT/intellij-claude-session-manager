@@ -49,9 +49,12 @@ class BindSessionAction : AnAction() {
             bindingService.createBinding(tabIdentifier, selectedSession.sessionId)
         }
 
-        // Set Claude icon on the tab (on EDT)
+        // Set Claude icon and title protection on the tab (on EDT)
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            context.content?.let { TerminalHelper.setClaudeIconOnContent(it) }
+            context.content?.let {
+                TerminalHelper.setClaudeIconOnContent(it)
+                TerminalHelper.protectTabTitleIfEnabled(project, it)
+            }
         }
 
         // Execute resume command to load the session

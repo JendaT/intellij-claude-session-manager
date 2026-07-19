@@ -77,4 +77,44 @@ class TabIdentifierTest {
         // 0.7 name base + 0.05 cwd bonus, timestamps too far apart for a time bonus.
         assertEquals(0.75, a.matchConfidence(b))
     }
+
+    // --- Persistent-name (restart-stable) matching ---
+
+    @Test
+    fun `persistent name matches even when display names were polluted by OSC titles`() {
+        // Binding captured while Claude Code had renamed the tab (name snapshot is garbage),
+        // but the persistent name recorded the terminal-persisted identity.
+        val binding = TabIdentifier(name = "Claude Code", createdAt = 0, persistentName = "Adv dev")
+        // After restart the restored tab carries the clean persisted name.
+        val restored = TabIdentifier(name = "Adv dev", createdAt = 10_000_000, persistentName = "Adv dev")
+        assertTrue(binding.matchConfidence(restored) >= TabIdentifier.MEDIUM_CONFIDENCE_THRESHOLD)
+    }
+
+    @Test
+    fun `persistent name takes precedence over display name in fallback`() {
+        // Same display name but different persistent names -> different tabs.
+        val a = TabIdentifier(name = "Claude Code", createdAt = 0, persistentName = "Local")
+        val b = TabIdentifier(name = "Claude Code", createdAt = 0, persistentName = "Local (2)")
+        assertEquals(0.0, a.matchConfidence(b))
+    }
+
+    @Test
+    fun `effective name falls back to display name when persistent name absent`() {
+        val a = TabIdentifier(name = "build", createdAt = 0)
+        val b = TabIdentifier(name = "build", createdAt = 0, persistentName = "other")
+        // a.effectiveName = "build", b.effectiveName = "other" -> no match.
+        assertEquals(0.0, a.matchConfidence(b))
+
+        val c = TabIdentifier(name = "build", createdAt = 0, persistentName = "build")
+        assertTrue(a.matchConfidence(c) >= TabIdentifier.HIGH_CONFIDENCE_THRESHOLD)
+    }
+
+    @Test
+    fun `stale uuid mismatch still returns zero pairwise`() {
+        // Pairwise semantics unchanged: services resolve stale uuids before matching
+        // (BindingMigrationService re-attaches by persistent name on startup).
+        val binding = TabIdentifier(name = "t", createdAt = 0, tabUuid = "stale", persistentName = "t")
+        val live = TabIdentifier(name = "t", createdAt = 0, tabUuid = "fresh", persistentName = "t")
+        assertEquals(0.0, binding.matchConfidence(live))
+    }
 }

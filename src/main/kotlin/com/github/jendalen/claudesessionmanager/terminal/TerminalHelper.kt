@@ -30,7 +30,8 @@ data class TerminalTabContext(
     val terminalView: TerminalView?,
     val shellWidget: ShellTerminalWidget?,
     val content: Content?,
-    val tabId: String? = null  // Stable per-tab id (Content UserData), when available
+    val tabId: String? = null,  // Stable per-tab id (Content UserData), when available
+    val persistentName: String? = null  // Terminal-persisted tab name (survives restart)
 ) {
     fun canExecuteCommands(): Boolean = terminalView != null || shellWidget != null
 }
@@ -103,6 +104,76 @@ object TerminalHelper {
     }
 
     /**
+     * Returns the tab name that the terminal plugin persists across IDE restarts for this tab:
+     * TerminalTitle.userDefinedTitle if the user renamed the tab, else the default title
+     * ("Local", "Local (2)", ...). Never the OSC application title, so Claude Code's title
+     * takeover ("Claude Code", "* Doing X...") cannot pollute it. Restored tabs come back
+     * with exactly this name, which makes it the cross-restart identity key.
+     *
+     * Falls back to the Content displayName when no title info is available.
+     */
+    fun getPersistentName(project: Project, content: Content): String? {
+        val title = findTerminalTitle(project, content)
+        if (title != null) {
+            val name = title.userDefinedTitle ?: title.defaultTitle
+            if (!name.isNullOrBlank()) return name
+        }
+        return content.displayName
+    }
+
+    /**
+     * Resolves the TerminalTitle for a tab Content, trying the reworked terminal first and
+     * the classic ShellTerminalWidget as fallback.
+     */
+    private fun findTerminalTitle(project: Project, content: Content): com.intellij.terminal.TerminalTitle? {
+        // Reworked terminal: match the tab by Content identity
+        try {
+            val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
+            tabsManager.tabs.firstOrNull { it.content === content }?.let { return it.view.title }
+        } catch (ex: Exception) {
+            logger.debug("TerminalToolWindowTabsManager not available: ${ex.message}")
+        }
+        // Classic terminal: find the widget whose built title equals the displayed name
+        try {
+            val terminalManager = TerminalToolWindowManager.getInstance(project)
+            val widget = terminalManager.terminalWidgets
+                .filterIsInstance<ShellTerminalWidget>()
+                .firstOrNull { it.terminalTitle.buildTitle() == content.displayName }
+            if (widget != null) return widget.terminalTitle
+        } catch (ex: Exception) {
+            logger.debug("TerminalToolWindowManager not available: ${ex.message}")
+        }
+        return null
+    }
+
+    /**
+     * Stops Claude Code's OSC title takeover from renaming this tab: clears any application
+     * title already applied and disables tracking of future application-title changes.
+     * IDE-side only - does not touch Claude Code settings. No-op if title info is unavailable.
+     */
+    fun protectTabTitle(project: Project, content: Content) {
+        try {
+            val title = findTerminalTitle(project, content) ?: return
+            title.change {
+                applicationTitle = null
+                trackTerminalApplicationTitleChanges = false
+            }
+            logger.info("Protected tab title for '${content.displayName}'")
+        } catch (ex: Exception) {
+            logger.warn("Failed to protect tab title for '${content.displayName}': ${ex.message}")
+        }
+    }
+
+    /**
+     * Applies title protection when the setting is enabled.
+     */
+    fun protectTabTitleIfEnabled(project: Project, content: Content) {
+        if (SettingsService.getInstance().protectTabNames) {
+            protectTabTitle(project, content)
+        }
+    }
+
+    /**
      * Finds a TerminalView by stable tab id using TerminalToolWindowTabsManager.
      */
     fun findTerminalViewByTabId(project: Project, tabId: String): TerminalView? {
@@ -154,7 +225,8 @@ object TerminalHelper {
             terminalView = terminalView,
             shellWidget = shellWidget,
             content = selectedContent,
-            tabId = tabId
+            tabId = tabId,
+            persistentName = getPersistentName(project, selectedContent)
         )
     }
 
@@ -276,7 +348,8 @@ object TerminalHelper {
             createdAt = System.currentTimeMillis(),
             shellPid = null,
             workingDirectory = null,
-            tabUuid = context.tabId
+            tabUuid = context.tabId,
+            persistentName = context.persistentName
         )
     }
 

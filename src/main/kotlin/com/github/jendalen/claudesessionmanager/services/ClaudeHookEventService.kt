@@ -288,13 +288,16 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
                 // Stable id makes the binding independent of Claude Code's tab renaming.
                 val tabId = TerminalHelper.getOrCreateTabId(selectedContent)
+                // Terminal-persisted name is the identity that survives IDE restarts.
+                val persistentName = TerminalHelper.getPersistentName(project, selectedContent)
 
                 val tabIdentifier = TabIdentifier(
                     name = tabName,
                     createdAt = System.currentTimeMillis(),
                     shellPid = null,
                     workingDirectory = cwd.ifBlank { null },
-                    tabUuid = tabId
+                    tabUuid = tabId,
+                    persistentName = persistentName
                 )
 
                 val bindingService = BindingService.getInstance(project)
@@ -306,7 +309,12 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 if (existingBinding != null) {
                     // Self-heal legacy (name-only) bindings by pinning them to the stable tab id.
                     if (existingBinding.tabIdentifier.tabUuid == null) {
-                        bindingService.attachTabUuid(existingBinding.id, tabId)
+                        bindingService.attachTabUuid(existingBinding.id, tabId, persistentName)
+                    } else if (persistentName != null &&
+                        existingBinding.tabIdentifier.persistentName != persistentName) {
+                        // Keep the restart-stable name in sync (covers older bindings without
+                        // one and tabs renamed since the binding was created).
+                        bindingService.updatePersistentName(existingBinding.id, persistentName)
                     }
 
                     // During auto-resume window, don't update existing bindings.
@@ -338,6 +346,7 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
                     // Set Claude icon
                     TerminalHelper.setClaudeIconOnContent(selectedContent)
+                    TerminalHelper.protectTabTitleIfEnabled(project, selectedContent)
 
                     if (settings.notifyOnAutoDetection) {
                         showNotification(

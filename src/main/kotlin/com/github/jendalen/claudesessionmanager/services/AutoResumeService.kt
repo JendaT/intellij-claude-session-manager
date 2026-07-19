@@ -27,6 +27,13 @@ class AutoResumeService : ProjectActivity {
 
     private val logger = Logger.getInstance(AutoResumeService::class.java)
 
+    companion object {
+        // Terminal tabs are restored asynchronously after project open; keep re-trying the
+        // binding re-attachment until they show up, within this budget.
+        private const val TAB_RESTORE_WAIT_BUDGET_MS = 15000L
+        private const val TAB_RESTORE_POLL_MS = 500L
+    }
+
     override suspend fun execute(project: Project) {
         val settings = SettingsService.getInstance()
 
@@ -46,9 +53,20 @@ class AutoResumeService : ProjectActivity {
         // Wait for terminal to initialize
         delay(delayMs.toLong())
 
-        // Migrate legacy name-only bindings onto the stable tab id model before resuming, so
-        // tabs can be matched by id rather than the now-volatile displayName. Runs on EDT.
+        // Re-attach bindings to restored tabs (stable ids do not survive restart; matching is
+        // by the terminal-persisted tab name). Tabs are restored asynchronously by the
+        // terminal plugin, so retry until every binding found its tab or the budget runs out.
         runMigration(project)
+        val migrationService = BindingMigrationService.getInstance(project)
+        var waited = 0L
+        while (migrationService.unattachedBindings().isNotEmpty() && waited < TAB_RESTORE_WAIT_BUDGET_MS) {
+            delay(TAB_RESTORE_POLL_MS)
+            waited += TAB_RESTORE_POLL_MS
+            runMigration(project)
+        }
+        if (waited > 0) {
+            logger.info("Auto-resume waited additional ${waited}ms for terminal tab restoration")
+        }
 
         // Get bindings that need auto-resume
         val bindingService = BindingService.getInstance(project)
@@ -78,15 +96,21 @@ class AutoResumeService : ProjectActivity {
         // Resume each binding
         for (binding in bindings) {
             val tabName = binding.tabIdentifier.name
+            val persistentName = binding.tabIdentifier.persistentName ?: tabName
             val tabUuid = binding.tabIdentifier.tabUuid
 
-            // Prefer matching by stable tab id (set this startup by migration); fall back to name.
+            // Prefer matching by stable tab id (set this startup by migration); fall back to
+            // the terminal-persisted name, then the volatile display name.
             val toolWindow = TerminalHelper.getTerminalToolWindow(project)
             var terminalView = tabUuid?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
             var content = tabUuid?.let { TerminalHelper.findContentByTabId(project, it) }
             if (terminalView == null && content == null) {
-                terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
-                content = toolWindow?.contentManager?.contents?.find { it.displayName == tabName }
+                content = toolWindow?.contentManager?.contents?.find {
+                    TerminalHelper.getPersistentName(project, it) == persistentName
+                } ?: toolWindow?.contentManager?.contents?.find { it.displayName == tabName }
+                terminalView = content?.let { c ->
+                    TerminalHelper.findTerminalViewByTabId(project, TerminalHelper.getOrCreateTabId(c))
+                } ?: TerminalHelper.findTerminalViewByTabName(project, tabName)
             }
             // Resolve the id we will target with the command (the tab's actual current id).
             val resolvedTabId = content?.let { TerminalHelper.getTabId(it) } ?: tabUuid
@@ -111,10 +135,11 @@ class AutoResumeService : ProjectActivity {
                 val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
                 if (success) {
                     bindingService.markBindingResumed(binding.id)
-                    // Set icon on EDT
+                    // Set icon and title protection on EDT
                     content?.let { c ->
                         ApplicationManager.getApplication().invokeLater {
                             TerminalHelper.setClaudeIconOnContent(c)
+                            TerminalHelper.protectTabTitleIfEnabled(project, c)
                         }
                     }
                     resumedCount++

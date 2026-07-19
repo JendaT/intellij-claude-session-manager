@@ -65,7 +65,14 @@ data class PluginSettings(
      * Works around Claude Code repeatedly enabling this setting.
      * macOS only - has no effect on other platforms.
      */
-    val forceOptionAsMetaKeyOff: Boolean = false
+    val forceOptionAsMetaKeyOff: Boolean = false,
+
+    /**
+     * Whether to protect bound terminal tabs from Claude Code's OSC title takeover.
+     * IDE-side: clears the application title and stops tracking further changes on tabs
+     * that have a session binding. Tab names then stay as the user set them.
+     */
+    val protectTabNames: Boolean = true
 ) {
     companion object {
         private val logger = Logger.getInstance(PluginSettings::class.java)

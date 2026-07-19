@@ -54,6 +54,7 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
         var tabShellPid: Long? = null
         var tabWorkingDirectory: String? = null
         var tabUuid: String? = null   // Stable per-tab id; null for legacy (pre-v2) bindings
+        var tabPersistentName: String? = null  // Terminal-persisted tab name; survives restart
         var currentSessionId: String = ""
         var autoResume: Boolean = true
         var createdAt: Long = 0
@@ -230,18 +231,46 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
     }
 
     /**
-     * Attaches/replaces the stable tab UUID on a binding's identifier, preserving all other
-     * identifier fields. Used by migration to bind legacy (name-only) bindings to the stable
-     * id of a now-matched live tab.
+     * Attaches/replaces the stable tab UUID (and optionally the terminal-persisted tab name)
+     * on a binding's identifier, preserving all other identifier fields. Used by migration to
+     * re-attach bindings to live tabs - both for legacy (name-only) bindings and for bindings
+     * whose UUID went stale after an IDE restart.
      */
-    fun attachTabUuid(bindingId: String, tabUuid: String): SessionBinding? {
+    fun attachTabUuid(bindingId: String, tabUuid: String, persistentName: String? = null): SessionBinding? {
         val binding = bindingsCache[bindingId] ?: return null
         val updated = binding.copy(
-            tabIdentifier = binding.tabIdentifier.copy(tabUuid = tabUuid)
+            tabIdentifier = binding.tabIdentifier.copy(
+                tabUuid = tabUuid,
+                persistentName = persistentName ?: binding.tabIdentifier.persistentName
+            )
         )
         bindingsCache[bindingId] = updated
         syncToState()
-        logger.info("Attached stable tab id $tabUuid to binding $bindingId")
+        logger.info("Attached stable tab id $tabUuid to binding $bindingId" +
+                (persistentName?.let { " (persistentName='$it')" } ?: ""))
+        return updated
+    }
+
+    /**
+     * Finds a binding by the stable tab UUID currently stored on its identifier.
+     */
+    fun findBindingByTabUuid(tabUuid: String): SessionBinding? {
+        return bindingsCache.values.find { it.tabIdentifier.tabUuid == tabUuid }
+    }
+
+    /**
+     * Updates the terminal-persisted tab name on a binding (e.g. after the user renames the
+     * tab). Keeps cross-restart matching in sync with what the terminal will persist.
+     */
+    fun updatePersistentName(bindingId: String, persistentName: String): SessionBinding? {
+        val binding = bindingsCache[bindingId] ?: return null
+        if (binding.tabIdentifier.persistentName == persistentName) return binding
+        val updated = binding.copy(
+            tabIdentifier = binding.tabIdentifier.copy(persistentName = persistentName)
+        )
+        bindingsCache[bindingId] = updated
+        syncToState()
+        logger.info("Updated persistent name of binding $bindingId to '$persistentName'")
         return updated
     }
 
@@ -273,6 +302,7 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
             tabShellPid = binding.tabIdentifier.shellPid
             tabWorkingDirectory = binding.tabIdentifier.workingDirectory
             tabUuid = binding.tabIdentifier.tabUuid
+            tabPersistentName = binding.tabIdentifier.persistentName
             currentSessionId = binding.currentSessionId
             autoResume = binding.autoResume
             createdAt = binding.createdAt
@@ -295,7 +325,8 @@ class BindingService(private val project: Project) : PersistentStateComponent<Bi
                 createdAt = entry.tabCreatedAt,
                 shellPid = entry.tabShellPid,
                 workingDirectory = entry.tabWorkingDirectory,
-                tabUuid = entry.tabUuid
+                tabUuid = entry.tabUuid,
+                persistentName = entry.tabPersistentName
             ),
             currentSessionId = entry.currentSessionId,
             sessionHistory = entry.history.map { h ->
