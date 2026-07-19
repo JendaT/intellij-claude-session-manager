@@ -193,7 +193,7 @@ class SessionWatcherService(private val project: Project) : Disposable {
      * Checks if a file is stable (not being written to).
      * Returns true if the file size and mtime haven't changed over the stability delay.
      */
-    private fun isFileStable(file: java.io.File): Boolean {
+    private fun isFileStable(file: File): Boolean {
         if (!file.exists()) return false
 
         val size1 = file.length()

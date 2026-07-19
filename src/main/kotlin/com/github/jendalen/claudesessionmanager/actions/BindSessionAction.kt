@@ -33,36 +33,35 @@ class BindSessionAction : AnAction() {
         // Show session picker
         val selectedSession = SessionPickerDialog.show(project) ?: return
 
-        // Create tab identifier from context
-        val tabIdentifier = TerminalHelper.createTabIdentifier(context)
-
-        // Create binding
-        val bindingService = BindingService.getInstance(project)
-
-        // Check if already bound
-        val existingBinding = bindingService.findBindingForTab(tabIdentifier)
-        if (existingBinding != null) {
-            // Update existing binding
-            bindingService.updateBindingSession(existingBinding.id, selectedSession.sessionId)
-        } else {
-            // Create new binding
-            bindingService.createBinding(tabIdentifier, selectedSession.sessionId)
+        val content = context.content
+        if (content == null) {
+            showNotification(project, "No terminal tab selected", NotificationType.WARNING)
+            return
         }
 
-        // Set Claude icon and title protection on the tab (on EDT)
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            context.content?.let {
-                TerminalHelper.setClaudeIconOnContent(it)
-                TerminalHelper.protectTabTitleIfEnabled(project, it)
-            }
+        // Bind through the central write path (adoption, self-heal, icon, title protection).
+        // force = explicit user action overrides the auto-resume suppression window.
+        val binding = com.github.jendalen.claudesessionmanager.services.TabBindingCoordinator
+            .getInstance(project)
+            .bindOrUpdate(
+                content = content,
+                sessionId = selectedSession.sessionId,
+                source = "manual",
+                displayInfo = selectedSession.displaySummary(),
+                force = true
+            )
+
+        if (binding == null) {
+            showNotification(project, "Could not bind session to this tab", NotificationType.WARNING)
+            return
         }
 
         // Execute resume command to load the session
+        val bindingService = BindingService.getInstance(project)
         val success = TerminalHelper.executeCommandInTerminal(project, context, selectedSession.sessionId)
 
         if (success) {
-            val binding = bindingService.findBindingForTab(tabIdentifier)
-            binding?.let { bindingService.markBindingResumed(it.id) }
+            bindingService.markBindingResumed(binding.id)
             showNotification(
                 project,
                 "Bound and resumed: ${selectedSession.displaySummary()}",
@@ -76,7 +75,7 @@ class BindSessionAction : AnAction() {
             )
         }
 
-        logger.info("Bound terminal '${tabIdentifier.name}' to session ${selectedSession.sessionId}")
+        logger.info("Bound terminal '${context.tabName}' to session ${selectedSession.sessionId}")
     }
 
     override fun update(e: AnActionEvent) {

@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.ui.content.Content
+import com.intellij.util.concurrency.annotations.RequiresEdt
 
 /**
  * Idempotent re-attachment of session bindings to live terminal tabs. Runs on every startup
@@ -40,11 +41,23 @@ class BindingMigrationService(private val project: Project) {
     }
 
     /**
+     * True when the terminal tool window exists and has at least one tab - i.e. a migration
+     * pass would actually have candidates to match against. Callers polling for tab
+     * restoration must not treat "terminal not ready yet" as "ran and matched nothing".
+     */
+    @RequiresEdt
+    fun isTerminalReady(): Boolean {
+        val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return false
+        return toolWindow.contentManager.contents.isNotEmpty()
+    }
+
+    /**
      * Runs the re-attachment pass. Cheap and idempotent; safe to call repeatedly. Must run
      * on the EDT (touches terminal tab Content and the tabs manager).
      *
      * @return the number of bindings re-attached in this pass
      */
+    @RequiresEdt
     fun migrate(): Int {
         val bindingService = BindingService.getInstance(project)
         val allBindings = bindingService.getAllBindings()
@@ -106,7 +119,10 @@ class BindingMigrationService(private val project: Project) {
                 continue
             }
 
-            bindingService.attachTabUuid(binding.id, liveId, targetName)
+            // Persist only a genuine TerminalTitle-derived name as the restart-stable key;
+            // a displayName-derived match keeps the binding's existing persistentName
+            // (attachTabUuid treats null as "leave unchanged").
+            bindingService.attachTabUuid(binding.id, liveId, titleNames[content])
             claimedTabIds.add(liveId)
             if (tabUuid == null) legacy++ else reattached++
             logger.info("Re-attached binding ${binding.id} ('$targetName') to live tab id $liveId (was ${tabUuid ?: "legacy"})")
@@ -124,14 +140,12 @@ class BindingMigrationService(private val project: Project) {
 
     /**
      * Returns bindings that still are not attached to any open tab (used by auto-resume to
-     * decide whether to keep waiting for tab restoration). Must run on the EDT.
+     * decide whether to keep waiting for tab restoration).
      */
+    @RequiresEdt
     fun unattachedBindings(): List<SessionBinding> {
         val bindingService = BindingService.getInstance(project)
-        val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return bindingService.getAllBindings()
-        val liveTabIds = toolWindow.contentManager.contents
-            .mapNotNull { TerminalHelper.getTabId(it) }
-            .toSet()
+        val liveTabIds = TerminalHelper.liveTabIds(project)
         return bindingService.getAllBindings().filter { it.tabIdentifier.tabUuid !in liveTabIds }
     }
 }

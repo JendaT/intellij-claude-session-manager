@@ -60,7 +60,7 @@ class TabIdentifierTest {
         val a = TabIdentifier(name = "term", createdAt = 0)
         val b = TabIdentifier(name = "term", createdAt = 10_000_000)
         val score = a.matchConfidence(b)
-        assertEquals(0.7, score)
+        assertEquals(0.7, score, 1e-9)
         assertTrue(score >= TabIdentifier.MEDIUM_CONFIDENCE_THRESHOLD)
     }
 
@@ -75,7 +75,7 @@ class TabIdentifierTest {
         val a = TabIdentifier(name = "t", createdAt = 0, workingDirectory = "/proj")
         val b = TabIdentifier(name = "t", createdAt = 10_000_000, workingDirectory = "/proj")
         // 0.7 name base + 0.05 cwd bonus, timestamps too far apart for a time bonus.
-        assertEquals(0.75, a.matchConfidence(b))
+        assertEquals(0.75, a.matchConfidence(b), 1e-9)
     }
 
     // --- Persistent-name (restart-stable) matching ---

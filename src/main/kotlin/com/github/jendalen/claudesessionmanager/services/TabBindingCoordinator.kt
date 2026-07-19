@@ -39,7 +39,7 @@ class TabBindingCoordinator(private val project: Project) {
     private var autoResumeSuppressUntil: Long = 0
 
     companion object {
-        private const val AUTO_RESUME_SUPPRESS_BUFFER_MS = 15000L
+        private const val AUTO_RESUME_SUPPRESS_WINDOW_MS = 15000L
 
         fun getInstance(project: Project): TabBindingCoordinator {
             return project.getService(TabBindingCoordinator::class.java)
@@ -52,8 +52,8 @@ class TabBindingCoordinator(private val project: Project) {
      * while multi-tab auto-resume interleaves startup/resume hook events across tabs.
      */
     fun suppressForAutoResume() {
-        autoResumeSuppressUntil = System.currentTimeMillis() + AUTO_RESUME_SUPPRESS_BUFFER_MS
-        logger.info("Auto-resume suppression window active for ${AUTO_RESUME_SUPPRESS_BUFFER_MS}ms")
+        autoResumeSuppressUntil = System.currentTimeMillis() + AUTO_RESUME_SUPPRESS_WINDOW_MS
+        logger.info("Auto-resume suppression window active for ${AUTO_RESUME_SUPPRESS_WINDOW_MS}ms")
     }
 
     fun isSuppressed(): Boolean = System.currentTimeMillis() < autoResumeSuppressUntil
@@ -65,7 +65,10 @@ class TabBindingCoordinator(private val project: Project) {
      * false - used by low-confidence channels that should never create bindings on their own).
      *
      * @param source short label of the detection channel, used in logs and notifications
-     * @param displayInfo human-readable session summary for notifications (defaults to the id)
+     * @param displayInfo human-readable session summary for notifications (defaults to a
+     *        truncated session id)
+     * @param force explicit user action: bypasses the suppression window (never the
+     *        validation and ambiguity rules)
      * @return the binding now covering the tab, or null when skipped
      */
     @RequiresEdt
@@ -75,9 +78,17 @@ class TabBindingCoordinator(private val project: Project) {
         source: String,
         workingDirectory: String? = null,
         displayInfo: String? = null,
-        allowCreate: Boolean = true
+        allowCreate: Boolean = true,
+        force: Boolean = false
     ): SessionBinding? {
         try {
+            // Fail closed before any mutation: sessionId comes from untrusted channels
+            // (hook files, terminal output) and downstream validation inside BindingService
+            // would otherwise fire after identity mutations have already been persisted.
+            if (!com.github.jendalen.claudesessionmanager.util.SessionIdValidator.isValid(sessionId)) {
+                logger.warn("Bind rejected: invalid session ID format (source=$source)")
+                return null
+            }
             // Team-managed tabs have their own binding lifecycle (v2.0).
             if (TerminalHelper.isTeamTab(content)) {
                 logger.info("Bind skipped: team-managed tab (session=$sessionId, source=$source)")
@@ -103,7 +114,7 @@ class TabBindingCoordinator(private val project: Project) {
             val bindingService = BindingService.getInstance(project)
             val settings = SettingsService.getInstance()
             val info = displayInfo ?: "${sessionId.take(8)}..."
-            val suppressed = isSuppressed()
+            val suppressed = isSuppressed() && !force
 
             val existing = bindingService.findBindingForTab(identifier)
             if (existing != null) {
@@ -124,12 +135,19 @@ class TabBindingCoordinator(private val project: Project) {
                 return bindingService.findBindingById(existing.id)
             }
 
+            // Low-confidence channels may neither create nor adopt (adoption rewrites an
+            // existing binding's session - a strictly stronger operation than creating).
+            if (!allowCreate) {
+                logger.info("Bind skipped: no existing binding and channel '$source' may not create one (session=$sessionId, tab='$tabName')")
+                return null
+            }
+
             // Adoption: a binding whose tab id went stale (IDE restart) and whose persistent
             // name identifies this tab gets re-attached instead of duplicated. Skipped during
             // the suppression window - the focused tab may not be the event's tab then, and
             // startup migration performs the same re-attachment safely.
             if (persistentName != null && !suppressed) {
-                val liveTabIds = liveTabIds()
+                val liveTabIds = TerminalHelper.liveTabIds(project)
                 val stale = bindingService.findStaleBindingByName(persistentName, liveTabIds)
                 if (stale != null) {
                     bindingService.attachTabUuid(stale.id, tabId, persistentName)
@@ -145,9 +163,22 @@ class TabBindingCoordinator(private val project: Project) {
                 }
             }
 
-            if (!allowCreate) {
-                logger.info("Bind skipped: no existing binding and channel '$source' may not create one (session=$sessionId, tab='$tabName')")
-                return null
+            // Session-ownership guard: during the suppression window the focused tab is an
+            // unreliable attribution, so never create a binding for a session that some
+            // binding already owns (the resume storm fires events for exactly those), and
+            // never create when a same-named stale binding exists (adoption was deferred -
+            // creating now would make that name permanently ambiguous).
+            if (suppressed) {
+                val owner = bindingService.findBindingBySessionId(sessionId)
+                if (owner != null) {
+                    logger.info("Bind suppressed: session $sessionId already owned by binding ${owner.id} (source=$source)")
+                    return owner
+                }
+                if (persistentName != null &&
+                    bindingService.findStaleBindingByName(persistentName, TerminalHelper.liveTabIds(project)) != null) {
+                    logger.info("Bind suppressed: stale binding exists for '$persistentName' - deferring to migration (source=$source)")
+                    return null
+                }
             }
 
             val binding = bindingService.createBinding(identifier, sessionId)
@@ -161,13 +192,6 @@ class TabBindingCoordinator(private val project: Project) {
             logger.warn("Failed to bind session $sessionId (source=$source): ${e.message}", e)
             return null
         }
-    }
-
-    private fun liveTabIds(): Set<String> {
-        val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return emptySet()
-        return toolWindow.contentManager.contents
-            .mapNotNull { TerminalHelper.getTabId(it) }
-            .toSet()
     }
 
     private fun applyTabSideEffects(content: Content) {

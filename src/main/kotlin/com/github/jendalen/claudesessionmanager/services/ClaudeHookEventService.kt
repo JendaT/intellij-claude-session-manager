@@ -97,6 +97,7 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
                 val eventFile = File(eventsDir, "current-session.json")
                 var pollCounter = 0
+                var lastPolledMtime = 0L
 
                 try {
                     while (!Thread.currentThread().isInterrupted && isWatching) {
@@ -123,11 +124,15 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                             }
                         }
 
-                        // Periodic fallback poll every POLL_INTERVAL_SECONDS to catch any missed events
+                        // Periodic fallback poll every POLL_INTERVAL_SECONDS to catch any missed
+                        // events. Gated on mtime so the steady state is a stat call, not a full
+                        // read + JSON parse of an unchanged file.
                         pollCounter++
                         if (pollCounter >= POLL_INTERVAL_SECONDS) {
                             pollCounter = 0
-                            if (eventFile.exists()) {
+                            val mtime = eventFile.lastModified()
+                            if (mtime != 0L && mtime != lastPolledMtime) {
+                                lastPolledMtime = mtime
                                 processSessionEvent(eventFile)
                             }
                         }
@@ -158,13 +163,14 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 return
             }
 
-            // The event file is untrusted input; refuse absurd sizes before reading.
-            if (eventFile.length() > MAX_EVENT_FILE_BYTES) {
-                logger.warn("Session event file too large (${eventFile.length()} bytes), ignoring")
+            // The event file is untrusted input; read a bounded number of bytes so the cap
+            // cannot be raced by the file growing between a length check and the read.
+            val bytes = eventFile.inputStream().use { it.readNBytes(MAX_EVENT_FILE_BYTES.toInt() + 1) }
+            if (bytes.size > MAX_EVENT_FILE_BYTES) {
+                logger.warn("Session event file too large (>${MAX_EVENT_FILE_BYTES} bytes), ignoring")
                 return
             }
-
-            val content = eventFile.readText().trim()
+            val content = bytes.toString(Charsets.UTF_8).trim()
             if (content.isEmpty()) {
                 logger.debug("Session event file is empty")
                 return
@@ -172,14 +178,19 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
             val event = json.decodeFromString<SessionEvent>(content)
 
+            // Reject implausible timestamps outright - clamping the stored watermark instead
+            // would make a corrupt far-future event reprocess forever on the fallback poll.
+            if (event.timestamp > System.currentTimeMillis() + MAX_TIMESTAMP_SKEW_MS) {
+                logger.warn("Session event timestamp too far in the future (${event.timestamp}), ignoring")
+                return
+            }
+
             // Skip if we've already processed this event
             if (event.timestamp <= lastProcessedTimestamp) {
                 logger.debug("Skipping already processed event: ${event.sessionId}")
                 return
             }
-            // Clamp: a corrupt far-future timestamp must not wedge event processing forever.
             lastProcessedTimestamp = event.timestamp
-                .coerceAtMost(System.currentTimeMillis() + MAX_TIMESTAMP_SKEW_MS)
 
             logger.info("Processing session event: sessionId=${event.sessionId}, source=${event.source}, cwd=${event.cwd}")
 
@@ -222,8 +233,10 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     private fun bindSessionFromEvent(event: SessionEvent) {
         val sessionService = ClaudeSessionService.getInstance(project)
 
-        // Try to find session metadata for better notifications, but don't block on it
-        sessionService.invalidateCache()
+        // Try to find session metadata for better notifications, but don't block on it.
+        // Uses the cached index view - a full invalidate + rescan here would block the
+        // shared watch thread on disk I/O before the bind is even dispatched; the retry
+        // coroutine below invalidates and rescans for the cache-miss case.
         val session = sessionService.findSessionByIdGlobal(event.sessionId)
 
         // Bind immediately - the hook event is authoritative, no index verification needed

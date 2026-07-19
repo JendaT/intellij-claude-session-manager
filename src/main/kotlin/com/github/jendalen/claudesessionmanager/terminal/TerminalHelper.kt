@@ -88,19 +88,22 @@ object TerminalHelper {
     fun getTabId(content: Content): String? = content.getUserData(STABLE_TAB_KEY)
 
     /**
-     * Stamps a specific stable id onto a Content. Used by migration to attach a UUID that
-     * has already been persisted into a binding, so the live tab and binding agree.
-     */
-    fun setTabId(content: Content, tabId: String) {
-        content.putUserData(STABLE_TAB_KEY, tabId)
-    }
-
-    /**
      * Finds the terminal tab Content carrying the given stable tab id.
      */
     fun findContentByTabId(project: Project, tabId: String): Content? {
         val toolWindow = getTerminalToolWindow(project) ?: return null
         return toolWindow.contentManager.contents.firstOrNull { getTabId(it) == tabId }
+    }
+
+    /**
+     * Returns the stable ids of all terminal tabs that currently carry one. Non-creating:
+     * tabs that have not been stamped yet are absent from the result.
+     */
+    fun liveTabIds(project: Project): Set<String> {
+        val toolWindow = getTerminalToolWindow(project) ?: return emptySet()
+        return toolWindow.contentManager.contents
+            .mapNotNull { getTabId(it) }
+            .toSet()
     }
 
     /**
@@ -607,31 +610,6 @@ object TerminalHelper {
     }
 
     /**
-     * Tries to find a TerminalView in a component hierarchy.
-     */
-    private fun findTerminalViewInComponent(component: java.awt.Component?): TerminalView? {
-        if (component == null) return null
-
-        // Check if component itself is or contains TerminalView
-        if (component is javax.swing.JComponent) {
-            // Try to get TerminalView from client properties
-            val terminalView = component.getClientProperty(TerminalView.DATA_KEY.name)
-            if (terminalView is TerminalView) {
-                return terminalView
-            }
-
-            // Recursively check children
-            for (i in 0 until component.componentCount) {
-                val child = component.getComponent(i)
-                val found = findTerminalViewInComponent(child)
-                if (found != null) return found
-            }
-        }
-
-        return null
-    }
-
-    /**
      * Resumes a Claude session using action event context.
      */
     fun resumeClaudeSession(e: AnActionEvent, sessionId: String): Boolean {
@@ -693,27 +671,7 @@ object TerminalHelper {
                     content.icon = claudeIcon
                     logger.debug("Set Claude icon on tab '$tabName'")
                 } catch (e: Exception) {
-                    logger.warn("Failed to set icon on tab '$tabName': ${e.message}")
-                }
-                break
-            }
-        }
-    }
-
-    /**
-     * Removes the Claude icon from a terminal tab by name.
-     */
-    fun removeClaudeIconFromTab(project: Project, tabName: String) {
-        val toolWindow = getTerminalToolWindow(project) ?: return
-        val contentManager = toolWindow.contentManager
-
-        for (content in contentManager.contents) {
-            if (content.displayName == tabName) {
-                try {
-                    content.icon = null
-                    logger.debug("Removed icon from tab '$tabName'")
-                } catch (e: Exception) {
-                    logger.warn("Failed to remove icon from tab '$tabName': ${e.message}")
+                    logger.warn("Failed to set icon on tab '$tabName': ${e.message}", e)
                 }
                 break
             }

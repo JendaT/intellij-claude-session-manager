@@ -67,30 +67,45 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Track if service is active
+    @Volatile
     private var isActive = false
+
+    // Guards against stacking tabs-manager listeners across stop/start cycles
+    // (they can only be released by disposing the service).
+    @Volatile
+    private var tabsManagerListenerRegistered = false
 
     // Prunes tab monitors when their terminal tab is closed
     private var contentRemovalListener: com.intellij.ui.content.ContentManagerListener? = null
 
     /**
-     * Starts monitoring terminal output.
+     * Starts monitoring terminal output. May be called from any thread; the actual setup
+     * runs on the EDT (tool window, content manager, and tabs-manager access).
      */
     fun startMonitoring() {
         if (isActive) {
             logger.debug("Terminal output monitoring already active")
             return
         }
+        ApplicationManager.getApplication().invokeLater { doStartMonitoring() }
+    }
+
+    private fun doStartMonitoring() {
+        if (isActive) return
 
         try {
             val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
 
-            // Register listener for new tabs
-            tabsManager.addListener(this, object : TerminalTabsManagerListener {
-                override fun tabAdded(tab: TerminalToolWindowTab) {
-                    logger.info("New terminal tab added: ${tab.content.displayName}")
-                    monitorTab(tab)
-                }
-            })
+            // Register listener for new tabs (once per service lifetime)
+            if (!tabsManagerListenerRegistered) {
+                tabsManager.addListener(this, object : TerminalTabsManagerListener {
+                    override fun tabAdded(tab: TerminalToolWindowTab) {
+                        logger.info("New terminal tab added: ${tab.content.displayName}")
+                        monitorTab(tab)
+                    }
+                })
+                tabsManagerListenerRegistered = true
+            }
 
             // Prune monitors when tabs close - otherwise buffers and listeners accumulate
             // for the life of the project as tabs are opened and closed.
@@ -120,6 +135,14 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
      */
     private fun monitorTab(tab: TerminalToolWindowTab) {
         val content = tab.content
+
+        // Team-managed tabs never bind through this channel (the coordinator skips them),
+        // so scanning their output - the chattiest terminals around - is wasted work.
+        if (TerminalHelper.isTeamTab(content)) {
+            logger.debug("Skipping team-managed tab '${content.displayName}'")
+            return
+        }
+
         // Stable id is the monitoring key; survives Claude Code renaming the tab.
         val tabId = TerminalHelper.getOrCreateTabId(content)
         val tabName = content.displayName ?: "Terminal"
@@ -158,17 +181,25 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             monitoredTabs[tabId] = tabMonitor
 
             // Keep the binding's restart-stable persistent name in sync with user renames.
-            // The persistent name is userDefinedTitle ?: defaultTitle - Claude Code's OSC
-            // application-title changes never affect it, so this fires meaningfully only when
-            // the user actually renames the tab (or the default title changes).
+            // NOTE: onTitleChanged fires on EVERY title change - including Claude Code's OSC
+            // spinner updates at several Hz - and on arbitrary threads. The last-seen cache
+            // filters the noise (the derived persistent name only changes on real renames),
+            // and the binding write is dispatched to the EDT like all other binding writers.
             try {
                 tab.view.title.addTitleListener(object : com.intellij.terminal.TerminalTitleListener {
+                    @Volatile
+                    private var lastSeenPersistentName: String? = null
+
                     override fun onTitleChanged(terminalTitle: com.intellij.terminal.TerminalTitle) {
                         val persistentName = TerminalHelper.persistentNameOf(terminalTitle) ?: return
-                        val bindingService = BindingService.getInstance(project)
-                        val binding = bindingService.findBindingByTabUuid(tabId)
-                        if (binding != null && binding.tabIdentifier.persistentName != persistentName) {
-                            bindingService.updatePersistentName(binding.id, persistentName)
+                        if (persistentName == lastSeenPersistentName) return
+                        lastSeenPersistentName = persistentName
+                        ApplicationManager.getApplication().invokeLater {
+                            val bindingService = BindingService.getInstance(project)
+                            val binding = bindingService.findBindingByTabUuid(tabId)
+                            if (binding != null && binding.tabIdentifier.persistentName != persistentName) {
+                                bindingService.updatePersistentName(binding.id, persistentName)
+                            }
                         }
                     }
                 }, tabDisposable)
@@ -178,9 +209,11 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
             // Monitor the active output model via StateFlow. collectLatest replays the
             // current value, so no separate initial registration is needed - doubling it
-            // up used to duplicate every output chunk in the scan buffer.
+            // up used to duplicate every output chunk in the scan buffer. The job is kept
+            // on the monitor and cancelled on tab close: the StateFlow never completes, so
+            // an uncancelled collector would pin the closed tab's object graph forever.
             val outputModels = tab.view.outputModels
-            scope.launch {
+            tabMonitor.collectorJob = scope.launch {
                 try {
                     outputModels.active.collectLatest { activeModel ->
                         logger.debug("Active output model changed for tab '$tabName'")
@@ -415,6 +448,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     fun stopMonitoringTab(tabId: String) {
         val monitor = monitoredTabs.remove(tabId)
         if (monitor != null) {
+            monitor.collectorJob?.cancel()
             monitor.content.removePropertyChangeListener(monitor.renameListener)
             Disposer.dispose(monitor.disposable)
             logger.debug("Stopped monitoring tab '${monitor.tabName}' (id=$tabId)")
@@ -436,6 +470,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         contentRemovalListener = null
         for ((_, monitor) in monitoredTabs) {
             try {
+                monitor.collectorJob?.cancel()
                 monitor.content.removePropertyChangeListener(monitor.renameListener)
                 Disposer.dispose(monitor.disposable)
             } catch (e: Exception) {
@@ -462,7 +497,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         val content: Content,
         val renameListener: PropertyChangeListener,
         @Volatile var modelDisposable: Disposable? = null,
-        var lastDetectedSessionId: String? = null,
+        @Volatile var collectorJob: kotlinx.coroutines.Job? = null,
+        @Volatile var lastDetectedSessionId: String? = null,
         val textBuffer: StringBuilder = StringBuilder(),
         val pendingVerifications: MutableSet<String> = ConcurrentHashMap.newKeySet()
     )

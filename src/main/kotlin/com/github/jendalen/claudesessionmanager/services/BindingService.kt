@@ -216,20 +216,6 @@ class BindingService(private val project: Project) :
     }
 
     /**
-     * Updates the tab identifier for a binding (e.g., when tab is renamed).
-     */
-    fun updateBindingTab(bindingId: String, newTabIdentifier: TabIdentifier): SessionBinding? {
-        val binding = bindingsCache[bindingId] ?: return null
-        val updated = binding.copy(tabIdentifier = newTabIdentifier)
-
-        bindingsCache[bindingId] = updated
-        syncToState()
-
-        logger.debug("Updated binding $bindingId tab identifier")
-        return updated
-    }
-
-    /**
      * Attaches/replaces the stable tab UUID (and optionally the terminal-persisted tab name)
      * on a binding's identifier, preserving all other identifier fields. Used by migration to
      * re-attach bindings to live tabs - both for legacy (name-only) bindings and for bindings

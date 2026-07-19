@@ -50,11 +50,4 @@ object NotificationHelper {
     fun warning(project: Project, title: String, content: String) {
         show(project, title, content, NotificationType.WARNING)
     }
-
-    /**
-     * Shows an error notification.
-     */
-    fun error(project: Project, title: String, content: String) {
-        show(project, title, content, NotificationType.ERROR)
-    }
 }

@@ -123,10 +123,11 @@ class AutoResumeService : ProjectActivity {
         var lastPending = Int.MAX_VALUE
 
         while (waited < TAB_RESTORE_WAIT_BUDGET_MS) {
-            val pending = try {
+            val (ready, pending) = try {
                 withContext(Dispatchers.EDT) {
-                    migrationService.migrate()
-                    migrationService.unattachedBindings().size
+                    val ready = migrationService.isTerminalReady()
+                    if (ready) migrationService.migrate()
+                    ready to migrationService.unattachedBindings().size
                 }
             } catch (e: Exception) {
                 logger.warn("Binding migration failed: ${e.message}", e)
@@ -135,12 +136,17 @@ class AutoResumeService : ProjectActivity {
 
             if (pending == 0) return
 
-            stagnantPolls = if (pending >= lastPending) stagnantPolls + 1 else 0
-            if (stagnantPolls >= MAX_STAGNANT_POLLS) {
-                logger.info("$pending binding(s) still unattached after ${waited}ms with no progress - continuing without them")
-                return
+            // Stagnation counts only actual matching attempts. "Terminal not restored yet"
+            // must keep the full wait budget - on slow startups the tool window can take
+            // many seconds to appear, and giving up early orphans every binding.
+            if (ready) {
+                stagnantPolls = if (pending >= lastPending) stagnantPolls + 1 else 0
+                if (stagnantPolls >= MAX_STAGNANT_POLLS) {
+                    logger.info("$pending binding(s) still unattached after ${waited}ms with no progress - continuing without them")
+                    return
+                }
+                lastPending = pending
             }
-            lastPending = pending
 
             delay(TAB_RESTORE_POLL_MS)
             waited += TAB_RESTORE_POLL_MS
@@ -213,17 +219,21 @@ class AutoResumeService : ProjectActivity {
 
         val toolWindow = TerminalHelper.getTerminalToolWindow(project) ?: return null
         val targetName = binding.tabIdentifier.effectiveName
+        // Match on TerminalTitle-derived names ONLY. Unlike migration (which runs before any
+        // Claude process starts), this executes mid-resume: earlier resumes may already have
+        // OSC-renamed their tabs' display names, so a displayName fallback here could turn a
+        // genuine ambiguity into a false "unique" match by elimination.
         val titleNames = TerminalHelper.persistentNamesSnapshot(project)
         val candidates = toolWindow.contentManager.contents
             .filterNot { TerminalHelper.isTeamTab(it) }
-            .filter { (titleNames[it] ?: it.displayName) == targetName }
+            .filter { titleNames[it] == targetName }
 
         val content = candidates.singleOrNull() ?: return null
         val liveId = TerminalHelper.getOrCreateTabId(content)
         val claimedBy = bindingService.findBindingByTabUuid(liveId)
         if (claimedBy != null && claimedBy.id != binding.id) return null
 
-        bindingService.attachTabUuid(binding.id, liveId, titleNames[content] ?: targetName)
+        bindingService.attachTabUuid(binding.id, liveId, titleNames[content])
         return content
     }
 
@@ -307,34 +317,52 @@ class AutoResumeService : ProjectActivity {
                 // Try to create a new terminal tab with the original name
                 val widget = TerminalHelper.createNewTerminalTab(project, tabName)
                 if (widget != null) {
-                    // Delay to let terminal initialize using a self-disposing alarm
+                    // Delay to let terminal initialize using a self-disposing alarm.
+                    // Parented to BindingService so project close releases it even when
+                    // the request never fires.
                     val alarmDisposable = Disposer.newDisposable("RecreateTabAlarm-$tabName")
+                    Disposer.register(BindingService.getInstance(project), alarmDisposable)
                     val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, alarmDisposable)
                     alarm.addRequest({
                         try {
-                            // Find the new tab and resume
-                            val terminalView = TerminalHelper.findTerminalViewByTabName(project, tabName)
+                            // Find the new tab and resume. Recreation typically happens
+                            // exactly when names were ambiguous, so apply the same
+                            // "exactly one unclaimed candidate" rule as everywhere else -
+                            // never send a resume into a pre-existing same-named tab.
+                            val bindingService = BindingService.getInstance(project)
                             val content = TerminalHelper.getTerminalToolWindow(project)
-                                ?.contentManager?.contents?.find { it.displayName == tabName }
+                                ?.contentManager?.contents
+                                ?.filterNot { TerminalHelper.isTeamTab(it) }
+                                ?.filter { it.displayName == tabName }
+                                ?.filterNot { c ->
+                                    TerminalHelper.getTabId(c)?.let { id ->
+                                        bindingService.findBindingByTabUuid(id)?.id?.let { it != binding.id } == true
+                                    } ?: false
+                                }
+                                ?.singleOrNull()
 
-                            if (terminalView != null || content != null) {
+                            if (content == null) {
+                                // Zero or several unclaimed candidates: guessing could send
+                                // the resume into an unrelated user terminal. Leave the new
+                                // tab as-is; the user can bind it manually.
+                                logger.info("Recreated tab '$tabName' could not be identified unambiguously - skipping resume")
+                            } else {
+                                val tabId = TerminalHelper.getOrCreateTabId(content)
+                                val terminalView = TerminalHelper.findTerminalViewByTabId(project, tabId)
                                 val context = TerminalTabContext(
                                     tabName = tabName,
                                     terminalView = terminalView,
                                     shellWidget = widget,
                                     content = content,
-                                    tabId = content?.let { TerminalHelper.getOrCreateTabId(it) },
+                                    tabId = tabId,
                                     persistentName = tabName
                                 )
                                 val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
                                 if (success) {
-                                    val bindingService = BindingService.getInstance(project)
-                                    context.tabId?.let { bindingService.attachTabUuid(binding.id, it, tabName) }
+                                    bindingService.attachTabUuid(binding.id, tabId, tabName)
                                     bindingService.markBindingResumed(binding.id)
-                                    content?.let {
-                                        TerminalHelper.setClaudeIconOnContent(it)
-                                        TerminalHelper.protectTabTitleIfEnabled(project, it)
-                                    }
+                                    TerminalHelper.setClaudeIconOnContent(content)
+                                    TerminalHelper.protectTabTitleIfEnabled(project, content)
                                     logger.info("Recreated and resumed tab '$tabName'")
                                 }
                             }

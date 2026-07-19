@@ -105,9 +105,8 @@
             serviceInterface="com.github.jendalen.claudesessionmanager.services.BindingService"
             serviceImplementation="com.github.jendalen.claudesessionmanager.services.BindingService"/>
 
-        <projectService
-            serviceInterface="com.github.jendalen.claudesessionmanager.services.TabBindingCoordinator"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.services.TabBindingCoordinator"/>
+        <!-- TabBindingCoordinator is a light service (@Service annotation) and must not be
+             registered here as well - the platform rejects double registration. -->
 
         <projectService
             serviceInterface="com.github.jendalen.claudesessionmanager.services.BindingMigrationService"
