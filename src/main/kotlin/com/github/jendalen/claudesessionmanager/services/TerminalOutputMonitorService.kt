@@ -180,7 +180,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             )
             monitoredTabs[tabId] = tabMonitor
 
-            // Keep the binding's restart-stable persistent name in sync with user renames.
+            // Keep the binding's restart-stable persistent name in sync with user renames,
+            // and enforce tab-title protection on the reworked terminal.
             // NOTE: onTitleChanged fires on EVERY title change - including Claude Code's OSC
             // spinner updates at several Hz - and on arbitrary threads. The last-seen cache
             // filters the noise (the derived persistent name only changes on real renames),
@@ -191,6 +192,16 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                     private var lastSeenPersistentName: String? = null
 
                     override fun onTitleChanged(terminalTitle: com.intellij.terminal.TerminalTitle) {
+                        // The reworked terminal applies OSC application titles without honoring
+                        // trackTerminalApplicationTitleChanges, so protection is enforced here:
+                        // clear the title whenever it reappears on a protected tab. The nested
+                        // change{} re-fires this listener once with applicationTitle == null,
+                        // which is a no-op - no loop.
+                        if (terminalTitle.applicationTitle != null && TerminalHelper.isTitleProtected(content)) {
+                            terminalTitle.change { applicationTitle = null }
+                            return
+                        }
+
                         val persistentName = TerminalHelper.persistentNameOf(terminalTitle) ?: return
                         if (persistentName == lastSeenPersistentName) return
                         lastSeenPersistentName = persistentName

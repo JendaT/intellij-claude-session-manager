@@ -63,6 +63,23 @@ object TerminalHelper {
     val STABLE_TAB_KEY = Key.create<String>("ClaudeSessionManager.StableTabId")
 
     /**
+     * Marks a tab whose title is protected from OSC application-title takeover.
+     *
+     * Needed because the REWORKED terminal (2026.1) applies OSC titles directly
+     * (TerminalViewImpl.listenApplicationTitleChanges, gated only by the IDE-wide advanced
+     * setting "terminal.show.application.title") and does NOT honor
+     * TerminalTitle.trackTerminalApplicationTitleChanges - that flag only guards the classic
+     * JediTerm path. Protection is therefore enforced reactively: the per-tab title listener
+     * clears applicationTitle whenever it reappears on a tab carrying this mark.
+     */
+    val TITLE_PROTECTED_KEY = Key.create<Boolean>("ClaudeSessionManager.TitleProtected")
+
+    /**
+     * True when [protectTabTitle] marked this tab's title as protected.
+     */
+    fun isTitleProtected(content: Content): Boolean = content.getUserData(TITLE_PROTECTED_KEY) == true
+
+    /**
      * Checks if a terminal tab Content is managed by the team system.
      */
     fun isTeamTab(content: Content): Boolean {
@@ -165,9 +182,13 @@ object TerminalHelper {
      */
     fun protectTabTitle(project: Project, content: Content) {
         try {
+            // The mark is what actually enforces protection on the reworked terminal (the
+            // title listener clears reappearing application titles - see TITLE_PROTECTED_KEY).
+            content.putUserData(TITLE_PROTECTED_KEY, true)
             val title = findTerminalTitle(project, content) ?: return
             title.change {
                 applicationTitle = null
+                // Honored by the classic JediTerm path only; kept for completeness.
                 trackTerminalApplicationTitleChanges = false
             }
             logger.info("Protected tab title for '${content.displayName}'")
@@ -181,6 +202,7 @@ object TerminalHelper {
      */
     fun unprotectTabTitle(project: Project, content: Content) {
         try {
+            content.putUserData(TITLE_PROTECTED_KEY, null)
             val title = findTerminalTitle(project, content) ?: return
             title.change {
                 trackTerminalApplicationTitleChanges = true

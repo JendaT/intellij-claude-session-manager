@@ -124,7 +124,9 @@ class PluginSettingsConfigurable : Configurable {
                         .comment(
                             "IDE-side: tabs with a session binding ignore the terminal-title escape " +
                                 "sequence Claude Code emits, so your tab names stay put. Does not change " +
-                                "any Claude Code settings."
+                                "any Claude Code settings. To disable these titles for ALL terminal tabs, " +
+                                "turn off the IDE's Advanced Setting \"Show application title\" " +
+                                "(terminal.show.application.title)."
                         )
                 }
                 row {
