@@ -47,6 +47,10 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         private const val SESSION_VERIFICATION_DELAY_MS = 1500L
         private const val LOG_TRUNCATE_LENGTH = 100
 
+        // Claude Code updates its OSC title continuously while working; once updates stop
+        // for this long, the tab's activity badge reverts to the plain Claude icon.
+        private const val ACTIVITY_IDLE_MS = 5000
+
         fun getInstance(project: Project): TerminalOutputMonitorService {
             return project.getService(TerminalOutputMonitorService::class.java)
         }
@@ -178,6 +182,9 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 content = content,
                 renameListener = renameListener
             )
+            tabMonitor.activityAlarm = com.intellij.util.Alarm(
+                com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, tabDisposable
+            )
             monitoredTabs[tabId] = tabMonitor
 
             // Keep the binding's restart-stable persistent name in sync with user renames,
@@ -196,9 +203,13 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                         // trackTerminalApplicationTitleChanges, so protection is enforced here:
                         // clear the title whenever it reappears on a protected tab. The nested
                         // change{} re-fires this listener once with applicationTitle == null,
-                        // which is a no-op - no loop.
-                        if (terminalTitle.applicationTitle != null && TerminalHelper.isTitleProtected(content)) {
+                        // which is a no-op - no loop. The suppressed title still carries
+                        // Claude's live status, which is re-surfaced as tab tooltip + icon
+                        // activity badge instead of a tab rename.
+                        val appTitle = terminalTitle.applicationTitle
+                        if (appTitle != null && TerminalHelper.isTitleProtected(content)) {
                             terminalTitle.change { applicationTitle = null }
+                            reportClaudeActivity(tabMonitor, appTitle)
                             return
                         }
 
@@ -239,6 +250,46 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
         } catch (e: Exception) {
             logger.warn("Failed to monitor tab '$tabName': ${e.message}", e)
+        }
+    }
+
+    /**
+     * Re-surfaces the suppressed OSC title as non-intrusive progress: the tab keeps its
+     * stable name and colored Claude icon, gains a live-activity badge while Claude works,
+     * and shows Claude's current status text as the tab tooltip. The badge reverts after
+     * [ACTIVITY_IDLE_MS] without title updates.
+     *
+     * Called from the title listener on arbitrary threads at several Hz (Claude's spinner);
+     * the alarm reset is thread-safe and cheap, UI mutations are dispatched to the EDT only
+     * when the visible state actually changes.
+     */
+    private fun reportClaudeActivity(tabMonitor: TabMonitor, rawTitle: String) {
+        val alarm = tabMonitor.activityAlarm
+        if (alarm != null && !alarm.isDisposed) {
+            alarm.cancelAllRequests()
+            alarm.addRequest({
+                tabMonitor.iconActive = false
+                TerminalHelper.setClaudeIconActivity(tabMonitor.content, false)
+            }, ACTIVITY_IDLE_MS)
+        }
+
+        // Strip Claude's leading spinner glyph ("* Doing X..." -> "Doing X...")
+        val status = rawTitle.dropWhile { !it.isLetterOrDigit() }.trim()
+        if (status == tabMonitor.lastStatus && tabMonitor.iconActive) return
+
+        ApplicationManager.getApplication().invokeLater {
+            if (status.isNotEmpty() && status != tabMonitor.lastStatus) {
+                tabMonitor.lastStatus = status
+                try {
+                    tabMonitor.content.description = "Claude: $status"
+                } catch (e: Exception) {
+                    logger.debug("Failed to set tab tooltip: ${e.message}")
+                }
+            }
+            if (!tabMonitor.iconActive) {
+                tabMonitor.iconActive = true
+                TerminalHelper.setClaudeIconActivity(tabMonitor.content, true)
+            }
         }
     }
 
@@ -511,6 +562,10 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         @Volatile var collectorJob: kotlinx.coroutines.Job? = null,
         @Volatile var lastDetectedSessionId: String? = null,
         val textBuffer: StringBuilder = StringBuilder(),
-        val pendingVerifications: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        val pendingVerifications: MutableSet<String> = ConcurrentHashMap.newKeySet(),
+        // Progress surfacing (suppressed OSC title -> tooltip + icon badge)
+        @Volatile var activityAlarm: com.intellij.util.Alarm? = null,
+        @Volatile var lastStatus: String? = null,
+        @Volatile var iconActive: Boolean = false
     )
 }

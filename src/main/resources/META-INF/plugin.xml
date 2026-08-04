@@ -23,6 +23,18 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.2</h3>
+        <ul>
+            <li>Fixed: duplicate bindings pointing at the same session no longer send the
+                resume command twice on startup (duplicates are cleaned up automatically).</li>
+            <li>Fixed: sessions whose conversation Claude Code already purged are no longer
+                blindly resumed ("No conversation found"); a notification offers starting a
+                fresh session in the same tab or removing the binding.</li>
+            <li>New: Claude's live progress is surfaced without renaming the tab - the bound
+                tab keeps its name and colored Claude icon, gains a green activity badge while
+                Claude works, and shows the current status as the tab tooltip.</li>
+        </ul>
+
         <h3>0.6.1</h3>
         <ul>
             <li>Fixed: "Protect bound tab names" now works on the reworked terminal (2026.1).

@@ -680,6 +680,36 @@ object TerminalHelper {
         }
     }
 
+    // Claude icon with the platform's green "live" badge, shown while Claude is actively
+    // working in the tab. Falls back to the plain icon if the badge API is unavailable.
+    private val claudeIconLive: Icon? by lazy {
+        val base = claudeIcon ?: return@lazy null
+        try {
+            com.intellij.execution.runners.ExecutionUtil.getLiveIndicator(base)
+        } catch (e: Throwable) {
+            logger.warn("Live indicator icon unavailable, using plain icon: ${e.message}")
+            base
+        }
+    }
+
+    /**
+     * Switches a bound tab's icon between the plain Claude icon and the "live" (activity)
+     * variant. No-op when the tab does not currently carry one of our icons - never steals
+     * the icon slot from tabs we did not decorate. Must run on EDT.
+     */
+    fun setClaudeIconActivity(content: Content, active: Boolean) {
+        val plain = claudeIcon ?: return
+        val live = claudeIconLive ?: plain
+        try {
+            val current = content.icon
+            if (current !== plain && current !== live) return
+            val target = if (active) live else plain
+            if (current !== target) content.icon = target
+        } catch (e: Exception) {
+            logger.debug("Failed to update icon activity on '${content.displayName}': ${e.message}")
+        }
+    }
+
     /**
      * Sets the Claude icon on a terminal tab by name.
      */

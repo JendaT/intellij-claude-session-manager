@@ -3,6 +3,7 @@ package com.github.jendalen.claudesessionmanager.services
 import com.github.jendalen.claudesessionmanager.model.SessionBinding
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.terminal.TerminalTabContext
+import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
@@ -60,9 +61,18 @@ class AutoResumeService : ProjectActivity {
             return
         }
 
-        // Get bindings that need auto-resume
+        // Get bindings that need auto-resume. Bindings already attached to a live tab go
+        // first so that, should duplicate-session bindings still exist (migration removes
+        // them, but it may not have run when no terminal was ready), the attached one wins
+        // the per-session dedup below.
         val bindingService = BindingService.getInstance(project)
+        val liveTabIds = try {
+            withContext(Dispatchers.EDT) { TerminalHelper.liveTabIds(project) }
+        } catch (e: Exception) {
+            emptySet()
+        }
         val bindings = bindingService.getAutoResumeBindings()
+            .sortedByDescending { it.tabIdentifier.tabUuid != null && it.tabIdentifier.tabUuid in liveTabIds }
 
         if (bindings.isEmpty()) {
             logger.info("No bindings with auto-resume enabled")
@@ -83,10 +93,26 @@ class AutoResumeService : ProjectActivity {
         // Track results
         var resumedCount = 0
         val missingBindings = mutableListOf<SessionBinding>()
+        val staleBindings = mutableListOf<SessionBinding>()
         var failedCount = 0
+        val handledSessionIds = mutableSetOf<String>()
 
         // Resume each binding
         for (binding in bindings) {
+            // A session runs in exactly one tab - never send the same resume twice
+            // (duplicate bindings used to type the command into the running Claude).
+            if (!handledSessionIds.add(binding.currentSessionId.lowercase())) {
+                logger.info("Skipping duplicate auto-resume of session ${binding.currentSessionId} (binding ${binding.id})")
+                continue
+            }
+            // Claude Code purges transcripts after its cleanup period; resuming a purged
+            // session just prints "No conversation found" into the tab. Skip and offer
+            // recovery instead.
+            if (!ClaudePathResolver.sessionFileExists(binding.currentSessionId)) {
+                logger.info("Session ${binding.currentSessionId} has no transcript on disk - skipping resume (binding ${binding.id})")
+                staleBindings.add(binding)
+                continue
+            }
             when (resumeBinding(project, binding, bindingService)) {
                 ResumeOutcome.RESUMED -> resumedCount++
                 ResumeOutcome.MISSING -> missingBindings.add(binding)
@@ -101,6 +127,10 @@ class AutoResumeService : ProjectActivity {
 
         if (missingBindings.isNotEmpty()) {
             showMissingTabsNotification(project, missingBindings, bindingService)
+        }
+
+        if (staleBindings.isNotEmpty()) {
+            showStaleSessionsNotification(project, staleBindings, bindingService)
         }
 
         if (failedCount > 0) {
@@ -306,6 +336,88 @@ class AutoResumeService : ProjectActivity {
         })
 
         notification.notify(project)
+    }
+
+    /**
+     * Shown when bindings point at sessions whose transcript no longer exists on disk
+     * (Claude Code purges old conversations). Resuming them is impossible forever, so the
+     * user chooses: start a fresh Claude session in the same tab (the binding then follows
+     * the new session via the SessionStart hook) or drop the binding.
+     */
+    private fun showStaleSessionsNotification(
+        project: Project,
+        staleBindings: List<SessionBinding>,
+        bindingService: BindingService
+    ) {
+        val tabNames = staleBindings.map { it.tabIdentifier.effectiveName }
+        val message = if (staleBindings.size == 1) {
+            "Session in tab '${tabNames[0]}' no longer exists (Claude Code removes old conversations)"
+        } else {
+            "${staleBindings.size} sessions no longer exist: ${tabNames.take(3).joinToString(", ")}${if (tabNames.size > 3) "..." else ""}"
+        }
+
+        val notification = NotificationGroupManager.getInstance()
+            .getNotificationGroup("ClaudeSessionManager")
+            .createNotification("Claude Sessions", message, NotificationType.WARNING)
+
+        notification.addAction(NotificationAction.createSimple("Start new session") {
+            ApplicationManager.getApplication().invokeLater {
+                startFreshSessions(project, staleBindings, bindingService)
+            }
+            notification.expire()
+        })
+
+        notification.addAction(NotificationAction.createSimple("Remove binding${if (staleBindings.size > 1) "s" else ""}") {
+            for (binding in staleBindings) {
+                bindingService.deleteBinding(binding.id)
+                logger.info("Removed binding for purged session ${binding.currentSessionId} ('${binding.tabIdentifier.effectiveName}')")
+            }
+            notification.expire()
+        })
+
+        notification.notify(project)
+    }
+
+    /**
+     * Starts a plain (new-session) Claude in the tab of each stale binding. The binding is
+     * not touched here - the SessionStart hook event updates its session id once Claude
+     * reports in. Runs on EDT.
+     */
+    private fun startFreshSessions(
+        project: Project,
+        staleBindings: List<SessionBinding>,
+        bindingService: BindingService
+    ) {
+        var started = 0
+        for (binding in staleBindings) {
+            val content = resolveContentForBinding(project, binding, bindingService)
+            if (content == null) {
+                logger.info("Tab for stale binding ${binding.id} ('${binding.tabIdentifier.effectiveName}') not found - cannot start new session")
+                continue
+            }
+            val displayName = content.displayName ?: binding.tabIdentifier.effectiveName
+            val tabId = TerminalHelper.getTabId(content)
+            val context = TerminalTabContext(
+                tabName = displayName,
+                terminalView = tabId?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
+                    ?: TerminalHelper.findTerminalViewByTabName(project, displayName),
+                shellWidget = TerminalHelper.findWidgetByName(project, displayName),
+                content = content,
+                tabId = tabId,
+                persistentName = binding.tabIdentifier.persistentName
+            )
+            if (TerminalHelper.executeCommand(context, TerminalHelper.getClaudeCommand())) {
+                TerminalHelper.setClaudeIconOnContent(content)
+                TerminalHelper.protectTabTitleIfEnabled(project, content)
+                started++
+                logger.info("Started new Claude session in tab '$displayName' (stale binding ${binding.id})")
+            } else {
+                logger.warn("Failed to start new Claude session in tab '$displayName'")
+            }
+        }
+        if (started > 0) {
+            showNotification(project, "$started new session${if (started > 1) "s" else ""} started", NotificationType.INFORMATION)
+        }
     }
 
     private fun recreateMissingTabs(project: Project, missingBindings: List<SessionBinding>) {

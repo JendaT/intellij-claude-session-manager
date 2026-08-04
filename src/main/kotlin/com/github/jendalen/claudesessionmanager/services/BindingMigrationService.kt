@@ -60,6 +60,7 @@ class BindingMigrationService(private val project: Project) {
     @RequiresEdt
     fun migrate(): Int {
         val bindingService = BindingService.getInstance(project)
+        removeDuplicateSessionBindings(bindingService)
         val allBindings = bindingService.getAllBindings()
         if (allBindings.isEmpty()) return 0
 
@@ -136,6 +137,31 @@ class BindingMigrationService(private val project: Project) {
             )
         }
         return total
+    }
+
+    /**
+     * A Claude session runs in exactly one terminal, so two bindings claiming the same
+     * session id are storage corruption (pre-0.6 name-based binding produced these; the
+     * observable symptom was the resume command being sent twice on startup). Keeps the
+     * most recently used binding per session and deletes the rest.
+     */
+    private fun removeDuplicateSessionBindings(bindingService: BindingService) {
+        val bySession = bindingService.getAllBindings().groupBy { it.currentSessionId.lowercase() }
+        for ((sessionId, group) in bySession) {
+            if (group.size < 2) continue
+            val keeper = group.maxWithOrNull(
+                compareBy({ it.lastResumedAt ?: 0L }, { it.createdAt })
+            ) ?: continue
+            for (dup in group) {
+                if (dup.id != keeper.id) {
+                    bindingService.deleteBinding(dup.id)
+                    logger.info(
+                        "Removed duplicate binding ${dup.id} ('${dup.tabIdentifier.effectiveName}') - " +
+                            "session $sessionId stays on binding ${keeper.id}"
+                    )
+                }
+            }
+        }
     }
 
     /**
