@@ -38,8 +38,15 @@ class TabBindingCoordinator(private val project: Project) {
     @Volatile
     private var autoResumeSuppressUntil: Long = 0
 
+    // Tabs the user explicitly started a fresh Claude session in (e.g. the "Start new
+    // session" recovery action). The next fresh-session event on such a tab bypasses the
+    // suppression window - it is a user action, not resume-storm noise. Keyed by stable
+    // tab id, values are expiry timestamps.
+    private val pendingFreshTabs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     companion object {
         private const val AUTO_RESUME_SUPPRESS_WINDOW_MS = 15000L
+        private const val PENDING_FRESH_WINDOW_MS = 60000L
 
         fun getInstance(project: Project): TabBindingCoordinator {
             return project.getService(TabBindingCoordinator::class.java)
@@ -57,6 +64,36 @@ class TabBindingCoordinator(private val project: Project) {
     }
 
     fun isSuppressed(): Boolean = System.currentTimeMillis() < autoResumeSuppressUntil
+
+    /**
+     * Marks a tab as expecting a fresh Claude session started by explicit user action.
+     * The next session event on this tab whose session no binding owns yet is applied even
+     * inside the suppression window (which otherwise swallowed it - observed live: the
+     * "Start new session" recovery click 8s after startup left the binding on the dead
+     * session forever).
+     */
+    fun expectFreshSession(tabUuid: String) {
+        pendingFreshTabs[tabUuid] = System.currentTimeMillis() + PENDING_FRESH_WINDOW_MS
+        logger.info("Expecting fresh session in tab $tabUuid within ${PENDING_FRESH_WINDOW_MS}ms")
+    }
+
+    /**
+     * Consumes a pending fresh-session expectation for the tab. True only when the mark is
+     * present and unexpired AND [sessionId] is genuinely fresh (no binding owns it) - the
+     * resume storm fires events for sessions that all have owners, so those can never
+     * consume the mark even if they land on this tab.
+     */
+    private fun consumePendingFresh(tabUuid: String, sessionId: String, bindingService: BindingService): Boolean {
+        val expiry = pendingFreshTabs[tabUuid] ?: return false
+        if (System.currentTimeMillis() > expiry) {
+            pendingFreshTabs.remove(tabUuid)
+            return false
+        }
+        if (bindingService.findBindingBySessionId(sessionId) != null) return false
+        pendingFreshTabs.remove(tabUuid)
+        logger.info("Fresh-session expectation consumed for tab $tabUuid by session $sessionId")
+        return true
+    }
 
     /**
      * Binds [sessionId] to the terminal tab [content], reusing/healing an existing binding
@@ -114,7 +151,8 @@ class TabBindingCoordinator(private val project: Project) {
             val bindingService = BindingService.getInstance(project)
             val settings = SettingsService.getInstance()
             val info = displayInfo ?: "${sessionId.take(8)}..."
-            val suppressed = isSuppressed() && !force
+            val suppressed = isSuppressed() && !force &&
+                !consumePendingFresh(tabId, sessionId, bindingService)
 
             val existing = bindingService.findBindingForTab(identifier)
             if (existing != null) {

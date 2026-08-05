@@ -23,6 +23,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.3</h3>
+        <ul>
+            <li>Fixed: the "Start new session" recovery action now binds the new session even
+                when clicked during the startup suppression window (the target tab is
+                pre-authorized; other tabs stay protected from resume-storm flip-flop).</li>
+            <li>Compatibility: title tracking flag resolved reflectively - it was removed from
+                the platform in 2026.2. Verified compatible with 2026.1.6 and 2026.2.</li>
+        </ul>
+
         <h3>0.6.2</h3>
         <ul>
             <li>Fixed: duplicate bindings pointing at the same session no longer send the

@@ -396,10 +396,17 @@ class AutoResumeService : ProjectActivity {
                 continue
             }
             val displayName = content.displayName ?: binding.tabIdentifier.effectiveName
-            val tabId = TerminalHelper.getTabId(content)
+            val tabId = TerminalHelper.getOrCreateTabId(content)
+            // Authorize the upcoming fresh session to bind through the suppression window -
+            // this is an explicit user action, not resume-storm noise.
+            try {
+                TabBindingCoordinator.getInstance(project).expectFreshSession(tabId)
+            } catch (e: Exception) {
+                logger.warn("Failed to register fresh-session expectation: ${e.message}", e)
+            }
             val context = TerminalTabContext(
                 tabName = displayName,
-                terminalView = tabId?.let { TerminalHelper.findTerminalViewByTabId(project, it) }
+                terminalView = TerminalHelper.findTerminalViewByTabId(project, tabId)
                     ?: TerminalHelper.findTerminalViewByTabName(project, displayName),
                 shellWidget = TerminalHelper.findWidgetByName(project, displayName),
                 content = content,
