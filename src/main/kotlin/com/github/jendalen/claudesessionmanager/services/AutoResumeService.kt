@@ -105,15 +105,23 @@ class AutoResumeService : ProjectActivity {
                 logger.info("Skipping duplicate auto-resume of session ${binding.currentSessionId} (binding ${binding.id})")
                 continue
             }
-            // Claude Code purges transcripts after its cleanup period; resuming a purged
-            // session just prints "No conversation found" into the tab. Skip and offer
-            // recovery instead.
-            if (!ClaudePathResolver.sessionFileExists(binding.currentSessionId)) {
-                logger.info("Session ${binding.currentSessionId} has no transcript on disk - skipping resume (binding ${binding.id})")
+            // Resume the newest session of this binding that actually has a transcript.
+            // The current id alone is not enough: claude --resume forks the conversation
+            // under a NEW session id, and if nothing is typed afterwards that fork is never
+            // written to disk - the real conversation is then the previous id in history.
+            // No id with a transcript at all means genuinely purged - offer recovery.
+            val resumableSessionId = resolveResumableSessionId(binding)
+            if (resumableSessionId == null) {
+                logger.info("No session of binding ${binding.id} ('${binding.tabIdentifier.effectiveName}') has a transcript on disk - skipping resume")
                 staleBindings.add(binding)
                 continue
             }
-            when (resumeBinding(project, binding, bindingService)) {
+            if (resumableSessionId != binding.currentSessionId) {
+                logger.info("Falling back to session $resumableSessionId for binding ${binding.id} " +
+                    "(current ${binding.currentSessionId} was never persisted - empty resume fork)")
+                handledSessionIds.add(resumableSessionId.lowercase())
+            }
+            when (resumeBinding(project, binding, bindingService, resumableSessionId)) {
                 ResumeOutcome.RESUMED -> resumedCount++
                 ResumeOutcome.MISSING -> missingBindings.add(binding)
                 ResumeOutcome.FAILED -> failedCount++
@@ -185,13 +193,26 @@ class AutoResumeService : ProjectActivity {
     }
 
     /**
-     * Resolves the terminal tab for a binding and sends the resume command. Runs entirely
-     * on the EDT - tab resolution touches ToolWindow/ContentManager/tabs-manager state.
+     * Returns the newest session id of this binding whose transcript exists on disk:
+     * the current id first, then the history entries newest-first. Null when none exists.
+     */
+    private fun resolveResumableSessionId(binding: SessionBinding): String? {
+        val candidates = listOf(binding.currentSessionId) +
+            binding.sessionHistory.sortedByDescending { it.replacedAt }.map { it.sessionId }
+        return candidates.distinct().firstOrNull { ClaudePathResolver.sessionFileExists(it) }
+    }
+
+    /**
+     * Resolves the terminal tab for a binding and sends the resume command for [sessionId]
+     * (usually the binding's current session, possibly an older one from history when the
+     * current id was an unpersisted resume fork). Runs entirely on the EDT - tab resolution
+     * touches ToolWindow/ContentManager/tabs-manager state.
      */
     private suspend fun resumeBinding(
         project: Project,
         binding: SessionBinding,
-        bindingService: BindingService
+        bindingService: BindingService,
+        sessionId: String = binding.currentSessionId
     ): ResumeOutcome = withContext(Dispatchers.EDT) {
         val targetName = binding.tabIdentifier.effectiveName
         try {
@@ -215,19 +236,19 @@ class AutoResumeService : ProjectActivity {
                 persistentName = binding.tabIdentifier.persistentName
             )
 
-            val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
+            val success = TerminalHelper.executeCommandInTerminal(project, context, sessionId)
             if (success) {
                 bindingService.markBindingResumed(binding.id)
                 TerminalHelper.setClaudeIconOnContent(content)
                 TerminalHelper.protectTabTitleIfEnabled(project, content)
-                logger.info("Auto-resumed session ${binding.currentSessionId} in tab '$displayName'")
+                logger.info("Auto-resumed session $sessionId in tab '$displayName'")
                 ResumeOutcome.RESUMED
             } else {
-                logger.warn("Failed to resume session ${binding.currentSessionId} in tab '$displayName'")
+                logger.warn("Failed to resume session $sessionId in tab '$displayName'")
                 ResumeOutcome.FAILED
             }
         } catch (e: Exception) {
-            logger.error("Error resuming session ${binding.currentSessionId}: ${e.message}", e)
+            logger.error("Error resuming session $sessionId: ${e.message}", e)
             ResumeOutcome.FAILED
         }
     }
@@ -432,6 +453,12 @@ class AutoResumeService : ProjectActivity {
 
         for (binding in missingBindings) {
             val tabName = binding.tabIdentifier.effectiveName
+            // Same fallback as the resume loop: the current id may be an unpersisted fork.
+            val resumableSessionId = resolveResumableSessionId(binding)
+            if (resumableSessionId == null) {
+                logger.info("No session of binding ${binding.id} ('$tabName') has a transcript - not recreating its tab")
+                continue
+            }
             try {
                 // Try to create a new terminal tab with the original name
                 val widget = TerminalHelper.createNewTerminalTab(project, tabName)
@@ -476,7 +503,7 @@ class AutoResumeService : ProjectActivity {
                                     tabId = tabId,
                                     persistentName = tabName
                                 )
-                                val success = TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
+                                val success = TerminalHelper.executeCommandInTerminal(project, context, resumableSessionId)
                                 if (success) {
                                     bindingService.attachTabUuid(binding.id, tabId, tabName)
                                     bindingService.markBindingResumed(binding.id)

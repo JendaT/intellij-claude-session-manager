@@ -23,6 +23,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.4</h3>
+        <ul>
+            <li>Fixed: sessions are no longer skipped as "purged" when the binding's current
+                id is an unpersisted resume fork (claude --resume forks the conversation under
+                a new id; idle forks never reach disk). Resume now falls back through the
+                binding's session history to the newest id with a transcript.</li>
+        </ul>
+
         <h3>0.6.3</h3>
         <ul>
             <li>Fixed: the "Start new session" recovery action now binds the new session even
