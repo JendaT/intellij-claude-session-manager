@@ -154,6 +154,26 @@ class TabBindingCoordinator(private val project: Project) {
             val suppressed = isSuppressed() && !force &&
                 !consumePendingFresh(tabId, sessionId, bindingService)
 
+            // Hook events carry no terminal identity - they are attributed to the SELECTED
+            // tab, which is wrong whenever several sessions start at once (the resume storm
+            // fires each tab's event while the user looks at one tab; events arrive 60-90s
+            // after launch, far outside any suppression window). A session that is already
+            // bound to a DIFFERENT live tab therefore never moves on a hook event; only the
+            // tab-accurate output channel and explicit user actions may move it.
+            if (!force && source != "output") {
+                val owner = bindingService.findBindingBySessionId(sessionId)
+                val ownerTabUuid = owner?.tabIdentifier?.tabUuid
+                if (owner != null && ownerTabUuid != null && ownerTabUuid != tabId &&
+                    TerminalHelper.findContentByTabId(project, ownerTabUuid) != null
+                ) {
+                    logger.info(
+                        "Bind skipped: session $sessionId already bound to live tab " +
+                            "'${owner.tabIdentifier.effectiveName}' - not moving it to '$tabName' (source=$source)"
+                    )
+                    return owner
+                }
+            }
+
             val existing = bindingService.findBindingForTab(identifier)
             if (existing != null) {
                 if (suppressed) {

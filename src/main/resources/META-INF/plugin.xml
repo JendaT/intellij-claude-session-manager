@@ -23,6 +23,16 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.5</h3>
+        <ul>
+            <li>Fixed: hook events can no longer move a session away from the live tab that
+                owns it. Multi-project resume storms fired each tab's SessionStart event at
+                the selected tab (events arrive up to 90s after launch, outside any
+                suppression window), overwriting unrelated bindings.</li>
+            <li>Fixed: duplicate-session cleanup now reverts the losing binding to its own
+                session history when possible instead of deleting it.</li>
+        </ul>
+
         <h3>0.6.4</h3>
         <ul>
             <li>Fixed: sessions are no longer skipped as "purged" when the binding's current

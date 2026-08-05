@@ -141,9 +141,11 @@ class BindingMigrationService(private val project: Project) {
 
     /**
      * A Claude session runs in exactly one terminal, so two bindings claiming the same
-     * session id are storage corruption (pre-0.6 name-based binding produced these; the
-     * observable symptom was the resume command being sent twice on startup). Keeps the
-     * most recently used binding per session and deletes the rest.
+     * session id are corruption (pre-0.6 name-based binding, or a misattributed hook event
+     * that copied one tab's session onto another). Keeps the most recently used binding per
+     * session; a losing binding is REVERTED to the newest session in its own history that
+     * still has a transcript and no other owner - it usually holds the tab's rightful
+     * session, stolen moments earlier. Only bindings with nothing to revert to are deleted.
      */
     private fun removeDuplicateSessionBindings(bindingService: BindingService) {
         val bySession = bindingService.getAllBindings().groupBy { it.currentSessionId.lowercase() }
@@ -153,7 +155,22 @@ class BindingMigrationService(private val project: Project) {
                 compareBy({ it.lastResumedAt ?: 0L }, { it.createdAt })
             ) ?: continue
             for (dup in group) {
-                if (dup.id != keeper.id) {
+                if (dup.id == keeper.id) continue
+                val fallback = dup.sessionHistory
+                    .sortedByDescending { it.replacedAt }
+                    .map { it.sessionId }
+                    .firstOrNull { sid ->
+                        !sid.equals(dup.currentSessionId, ignoreCase = true) &&
+                            bindingService.findBindingBySessionId(sid) == null &&
+                            com.github.jendalen.claudesessionmanager.util.ClaudePathResolver.sessionFileExists(sid)
+                    }
+                if (fallback != null) {
+                    bindingService.updateBindingSession(dup.id, fallback)
+                    logger.info(
+                        "Reverted duplicate binding ${dup.id} ('${dup.tabIdentifier.effectiveName}') " +
+                            "from stolen session $sessionId back to its own session $fallback"
+                    )
+                } else {
                     bindingService.deleteBinding(dup.id)
                     logger.info(
                         "Removed duplicate binding ${dup.id} ('${dup.tabIdentifier.effectiveName}') - " +
