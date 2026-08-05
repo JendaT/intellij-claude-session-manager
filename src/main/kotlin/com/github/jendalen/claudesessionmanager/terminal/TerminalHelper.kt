@@ -176,6 +176,31 @@ object TerminalHelper {
     }
 
     /**
+     * Setter of TerminalTitle.State.trackTerminalApplicationTitleChanges, resolved
+     * reflectively: the property was REMOVED in 262 (the reworked terminal never honored
+     * it), but on 261 the classic JediTerm path still does. Referencing it directly would
+     * throw NoSuchMethodError on 262; null here means "flag no longer exists - protection
+     * relies solely on the reactive title listener" (see TITLE_PROTECTED_KEY).
+     */
+    private val trackingFlagSetter: java.lang.reflect.Method? by lazy {
+        try {
+            com.intellij.terminal.TerminalTitle.State::class.java.methods.firstOrNull {
+                it.name == "setTrackTerminalApplicationTitleChanges" && it.parameterCount == 1
+            }
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    private fun setTrackingFlagIfPresent(state: com.intellij.terminal.TerminalTitle.State, value: Boolean) {
+        try {
+            trackingFlagSetter?.invoke(state, value)
+        } catch (e: Throwable) {
+            logger.debug("Could not set title tracking flag: ${e.message}")
+        }
+    }
+
+    /**
      * Stops Claude Code's OSC title takeover from renaming this tab: clears any application
      * title already applied and disables tracking of future application-title changes.
      * IDE-side only - does not touch Claude Code settings. No-op if title info is unavailable.
@@ -188,8 +213,8 @@ object TerminalHelper {
             val title = findTerminalTitle(project, content) ?: return
             title.change {
                 applicationTitle = null
-                // Honored by the classic JediTerm path only; kept for completeness.
-                trackTerminalApplicationTitleChanges = false
+                // Honored by the classic JediTerm path only; removed from the platform in 262.
+                setTrackingFlagIfPresent(this, false)
             }
             logger.info("Protected tab title for '${content.displayName}'")
         } catch (ex: Exception) {
@@ -205,7 +230,7 @@ object TerminalHelper {
             content.putUserData(TITLE_PROTECTED_KEY, null)
             val title = findTerminalTitle(project, content) ?: return
             title.change {
-                trackTerminalApplicationTitleChanges = true
+                setTrackingFlagIfPresent(this, true)
             }
             logger.info("Unprotected tab title for '${content.displayName}'")
         } catch (ex: Exception) {
