@@ -80,6 +80,22 @@ object TerminalHelper {
     fun isTitleProtected(content: Content): Boolean = content.getUserData(TITLE_PROTECTED_KEY) == true
 
     /**
+     * Marks a tab as carrying our bound-session decoration (Claude icon + title protection).
+     * Lives in Content UserData, so it dies with the IDE session and decoration is re-applied
+     * on the next run - exactly when the terminal has reset the tab's icon anyway.
+     */
+    val DECORATED_KEY = Key.create<Boolean>("ClaudeSessionManager.Decorated")
+
+    /**
+     * True when bound-tab decoration has already been applied to this tab in this IDE session.
+     * Used to keep decoration idempotent: the output channel re-confirms a binding every few
+     * seconds, and re-running the icon alarms on every confirmation is pure waste.
+     */
+    fun isDecorated(content: Content): Boolean = content.getUserData(DECORATED_KEY) == true
+
+    fun markDecorated(content: Content) = content.putUserData(DECORATED_KEY, true)
+
+    /**
      * Checks if a terminal tab Content is managed by the team system.
      */
     fun isTeamTab(content: Content): Boolean {

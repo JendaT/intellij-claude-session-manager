@@ -181,6 +181,11 @@ class TabBindingCoordinator(private val project: Project) {
                     return existing
                 }
                 bindingService.selfHealIdentity(existing.id, tabId, persistentName)
+                // Decorate here too, not only on create/adopt: a tab that reuses an existing
+                // binding (a reopened terminal matched by name, a session change in a bound
+                // tab) is just as bound, and without this it kept neither the Claude icon nor
+                // title protection - Claude's OSC title then renamed the tab freely.
+                applyTabSideEffects(content)
                 if (!existing.currentSessionId.equals(sessionId, ignoreCase = true)) {
                     bindingService.updateBindingSession(existing.id, sessionId)
                     logger.info("Auto-updated binding for '$tabName' from ${existing.currentSessionId} to $sessionId (source=$source)")
@@ -253,6 +258,11 @@ class TabBindingCoordinator(private val project: Project) {
     }
 
     private fun applyTabSideEffects(content: Content) {
+        // The output channel re-confirms live bindings every few seconds; re-running the icon
+        // alarms and title change on each confirmation is pure waste. The mark lives in
+        // Content UserData, so decoration is re-applied once per IDE session.
+        if (TerminalHelper.isDecorated(content)) return
+        TerminalHelper.markDecorated(content)
         TerminalHelper.setClaudeIconOnContent(content)
         TerminalHelper.protectTabTitleIfEnabled(project, content)
     }

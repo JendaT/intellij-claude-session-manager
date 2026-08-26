@@ -23,6 +23,16 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.6</h3>
+        <ul>
+            <li>Fixed: a tab that reuses an existing binding (reopened terminal matched by
+                name, or a session change in an already bound tab) now gets the Claude icon
+                and tab-title protection too. Without it such tabs stayed undecorated and
+                Claude's terminal title renamed them freely.</li>
+            <li>Decoration is applied once per tab per IDE session instead of on every
+                binding re-confirmation.</li>
+        </ul>
+
         <h3>0.6.5</h3>
         <ul>
             <li>Fixed: hook events can no longer move a session away from the live tab that
