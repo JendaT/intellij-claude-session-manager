@@ -42,6 +42,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Registry `project`/`tab` are published for a session whose only binding confirmation
   lands inside the auto-resume suppression window; previously that path returned early
   and the fields stayed absent.
+- Project close no longer deletes registry files of sessions that are live in another IDE
+  or terminal: only files this project published are removed, and never one whose process
+  is alive elsewhere. Deleting by binding id took away the double-resume guard's only input.
+- Auto-resume no longer resumes the same transcript twice when two bindings' histories
+  share it (the fallback id was added to the handled set without checking the result).
+- The hook-event watcher seeds its watermark from the event already on disk, so the last
+  SessionStart on the machine is not replayed into every project that opens.
+- The launch profile rejects flags that load files, run commands at launch or change
+  permissions (`--mcp-config`, `--settings`, `--permission-mode`,
+  `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt-file`,
+  `--add-dir`, `--plugin-dir`) and combined short flags carrying `-r`/`-c`. The value is
+  stored in `.idea/workspace.xml` inside the checkout; a cloned repository must not be able
+  to ship one that alters what Claude may do.
+- Two cross-model review passes (2026-09-19): notification and tooltip text built from
+  OSC-settable tab names goes through the HTML-escaping choke point; hook-script ownership
+  is matched on the exact command and revert removes only our hook from a shared entry; the
+  hook script is installed atomically, never through a symlink, with an explicit mode; the
+  session-history resume uses the stable tab id; the terminal-output scan no longer
+  re-filters and re-sorts the session index on the EDT per output chunk; detection
+  failures log at WARN instead of DEBUG; and a set of leaks, swallowed exceptions and dead
+  code across the services.
 
 ### Removed
 - The experimental Agent Teams module (dashboard, teammate tabs, settings page, actions).

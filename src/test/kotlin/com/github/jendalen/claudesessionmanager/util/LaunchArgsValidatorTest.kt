@@ -21,7 +21,9 @@ class LaunchArgsValidatorTest {
     fun `accepts server channel syntax and key=value flags`() {
         assertTrue(LaunchArgsValidator.isValid("--dangerously-load-development-channels server:foo"))
         assertTrue(LaunchArgsValidator.isValid("--model=opus --verbose"))
-        assertTrue(LaunchArgsValidator.isValid("--add-dir /Users/me/proj,../other"))
+        // Path characters (/ , .) are allowed; --add-dir itself is reserved (it widens
+        // the sandbox), so a flag with no such meaning carries the path here.
+        assertTrue(LaunchArgsValidator.isValid("--extra-path /Users/me/proj,../other"))
     }
 
     @Test
@@ -61,6 +63,21 @@ class LaunchArgsValidatorTest {
         }
         // Prefix matches are not the reserved flag.
         assertTrue(LaunchArgsValidator.isValid("--resume-something"))
+    }
+
+    // The value is repo-carried (.idea/workspace.xml); a cloned repository must not be
+    // able to make the plugin launch Claude with a file-loading or permission flag.
+    @Test
+    fun `rejects flags that load files or change permissions`() {
+        for (bad in listOf(
+            "--mcp-config .claude/x.json", "--settings evil.json", "--permission-mode bypassPermissions",
+            "--dangerously-skip-permissions", "--allowedTools Bash", "--append-system-prompt-file p.md",
+            "--add-dir /", "--plugin-dir /tmp/p", "--channels plugin:a@b --mcp-config x.json"
+        )) {
+            assertNull(LaunchArgsValidator.normalize(bad), "should reject: $bad")
+        }
+        assertTrue(LaunchArgsValidator.isValid("--channels plugin:test-channel@spike-market"))
+        assertTrue(LaunchArgsValidator.rejectionReason("--mcp-config x.json")!!.contains("--mcp-config"))
     }
 
     // `-cd` is `--continue --debug`; a session-selecting letter hidden in a combined short

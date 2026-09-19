@@ -268,7 +268,21 @@ was alive (the Warp session's; the 13 IDE ones connected their MCP, then died on
 `Bun.serve` EADDRINUSE). Per-worktree targeting is the orchestrator spec §3.4's job (outbound
 long-poll, no port), not something the spike can do.
 
-**Release note (superseded 2026-09-19 - all three fixed, 55 tests).** All three
+**Review (2026-09-19, `/bookbot:review-code-x`, two runs, Claude x4 + GPT gpt-6-astra).**
+Run 1: 65 merged findings, 22 SAFE-AUTO applied (`9bab291`). Run 2: 66, all run-1 fixes
+verified holding, 24 applied (`24d161d`). Four of the remaining Highs were then applied
+on the owner's decision: registry files of sessions owned or live elsewhere survive
+project close (amends D15 - the double-resume guard reads them); the resume dedup honours
+the fallback id; the hook watcher's watermark is seeded from the event on disk; the
+launch-profile allowlist reserves file-loading and permission flags. Still open, all
+NEEDS-REVIEW / DOMAIN-DECISION: the output channel's indexed path accepting any printed
+UUID from the same project (M20), the hook channel planting unowned sessions on the
+selected tab (H9), non-indexed ids re-verified every 1.5 s (H2), `project.save()` on the
+EDT per mutation (H3), four user actions bypassing the coordinator (H6), index-watch
+rewriting a binding despite `allowCreate=false` (H8), unsynchronised cross-process
+registry writers (M16). Roadmap.
+
+**Release note (superseded 2026-09-19 - all three fixed, 59 tests).** All three
 acceptance criteria hold, but two of the three defects
 corrupt the field external readers are meant to consume (`project`/`tab`, defects 2
 and 3) and the third resumes one transcript in two processes (defect 1). Defect 2 is

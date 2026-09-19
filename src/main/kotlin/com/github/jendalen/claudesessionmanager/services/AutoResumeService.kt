@@ -139,7 +139,15 @@ class AutoResumeService : ProjectActivity {
             if (resumableSessionId != binding.currentSessionId) {
                 logger.info("Falling back to session $resumableSessionId for binding ${binding.id} " +
                     "(current ${binding.currentSessionId} was never persisted - empty resume fork)")
-                handledSessionIds.add(resumableSessionId.lowercase())
+                // The fallback id is the one that will be typed. Another binding may have
+                // resumed it already (a reverted dedup loser keeps the stolen id in its
+                // history); ignoring this return value typed the same transcript twice,
+                // milliseconds apart - too fast for the registry pid check to see.
+                if (!handledSessionIds.add(resumableSessionId.lowercase())) {
+                    logger.info("Skipping binding ${binding.id} ('${binding.tabIdentifier.effectiveName}'): " +
+                        "its fallback session $resumableSessionId is already being resumed by another binding")
+                    continue
+                }
             }
             // Bindings are per project per IDE, and the same session can be bound in two
             // of them (a stale binding survives in the project the session was moved out

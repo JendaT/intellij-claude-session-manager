@@ -41,7 +41,7 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
 - [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).
 - [x] `sessions.jsonl` append removed from the hook script (v0.7.0). The 1.1 MB file on
   disk can be deleted by hand; nothing reads it.
-- [x] Tests: 55 across validators, command assembly, resume fallback, hook installer,
+- [x] Tests: 59 across validators, command assembly, resume fallback, hook installer,
   registry service (read, sweep liveness), transcript cwd reader, path matching, and the
   hook script itself (run under bash + jq).
 - [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` once the v2 hook is live.
@@ -73,6 +73,17 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   auto-resume window an existing binding is returned without publishing to the registry,
   so a session whose only output-channel confirmation lands inside the window never gets
   `project`/`tab`. Publishing an unchanged binding is safe there. One line. Plan defect 2.
+- [ ] **Review leftovers (2026-09-19, two cross-model runs), all needing a design call:**
+  M20 the output channel's *indexed* path accepts any UUID printed in a tab of the same
+  project (the 0.7.0 cwd guard covers only the unindexed path) - the principled fix is
+  to accept a UUID only inside a `claude ... --resume <id>` launch line; H9 the hook
+  channel writes any *unowned* session onto the selected tab (registry `pid` comparison
+  can refuse); H2 non-indexed ids re-verified every 1.5 s with a global scan; H3
+  `project.save()` on the EDT after every binding mutation; H6 four user actions write
+  bindings without `TabBindingCoordinator`; H8 index-watch rewrites an existing binding's
+  session despite `allowCreate=false`; M16 the registry's two cross-process writers are
+  unsynchronised (accepted in F6, revisit if lost updates show up). Full reports were
+  ephemeral; the findings are summarised in the plan.
 - [ ] **Resume-failure detector.** `AutoResumeService` logs "Auto-resumed session X in
   tab Y" when `executeCommandInTerminal` returns true - i.e. when the text reached the
   terminal. It never checks that Claude started, so a project trust dialog or a malformed

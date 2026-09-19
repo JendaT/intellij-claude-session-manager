@@ -84,6 +84,14 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
         val eventsDirPath = eventsDir.toPath()
 
+        // The file already on disk is the LAST SessionStart on the machine, from before
+        // this watcher existed. With a zero watermark the fallback poll replayed it into
+        // every project that opened - not only at IDE start, every project open - and
+        // bound it to that project's selected tab whenever its cwd matched. Seed the
+        // watermark with that event's own timestamp so only events written after this
+        // point are processed; the resume storm that follows startup is all newer.
+        lastProcessedTimestamp = existingEventTimestamp(File(eventsDir, "current-session.json"))
+
         try {
             watchService = FileSystems.getDefault().newWatchService()
             eventsDirPath.register(
@@ -157,6 +165,24 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
     /**
      * Processes a session event file.
      */
+    /**
+     * The `timestamp` of the event file as found at watcher start, or 0 when there is
+     * none or it cannot be read (then nothing is skipped, as before).
+     */
+    private fun existingEventTimestamp(eventFile: File): Long {
+        if (!eventFile.isFile) return 0L
+        return try {
+            val bytes = eventFile.inputStream().use { it.readNBytes(MAX_EVENT_FILE_BYTES.toInt() + 1) }
+            if (bytes.size > MAX_EVENT_FILE_BYTES) return 0L
+            val ts = json.decodeFromString<SessionEvent>(bytes.toString(Charsets.UTF_8).trim()).timestamp
+            if (ts > 0) logger.info("Hook watcher watermark seeded from the existing event (timestamp $ts); it will not be replayed")
+            ts
+        } catch (e: Exception) {
+            logger.info("Could not read the existing session event for the watermark: ${e.message}")
+            0L
+        }
+    }
+
     private fun processSessionEvent(eventFile: File) {
         try {
             if (!eventFile.exists()) {

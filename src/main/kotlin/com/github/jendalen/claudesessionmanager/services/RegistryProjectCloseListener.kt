@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.services
 
+import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectCloseListener
@@ -18,8 +19,31 @@ class RegistryProjectCloseListener : ProjectCloseListener {
         try {
             val sessionIds = BindingService.getInstance(project).getAllBindings().map { it.currentSessionId }
             if (sessionIds.isEmpty()) return
-            SessionRegistryService.getInstance().removeAll(sessionIds)
-            logger.info("Session registry: removed ${sessionIds.size} session(s) of closing project '${project.name}'")
+            val registry = SessionRegistryService.getInstance()
+            val basePath = project.basePath
+            var removed = 0
+            var kept = 0
+            for (id in sessionIds) {
+                // A binding here does not mean the session runs here: the same session can
+                // be bound in two projects (a stale binding survives in the project it was
+                // moved out of). Deleting by binding id took the file the LIVE IDE had
+                // published, and the double-resume guard then read nothing on the next
+                // start. Remove only what this project published, and never a file whose
+                // process is alive somewhere else.
+                val entry = registry.read(id) ?: continue
+                val ownedElsewhere = entry.project != null && entry.project != project.name
+                val liveElsewhere = entry.isLive() && entry.cwd != null && basePath != null &&
+                    !ClaudePathResolver.isPathMatch(basePath, entry.cwd)
+                if (ownedElsewhere || liveElsewhere) {
+                    kept++
+                    logger.info("Session registry: keeping $id on close of '${project.name}' - " +
+                        (if (ownedElsewhere) "published by project '${entry.project}'" else "process ${entry.pid} is alive in ${entry.cwd}"))
+                    continue
+                }
+                registry.remove(id)
+                removed++
+            }
+            logger.info("Session registry: removed $removed session(s) of closing project '${project.name}', kept $kept owned or live elsewhere")
         } catch (e: Exception) {
             logger.warn("Session registry cleanup on project close failed: ${e.message}")
         }
