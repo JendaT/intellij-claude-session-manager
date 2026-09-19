@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-17
+
+### Added
+- Per-project launch profile (Settings > Tools > Claude Session Manager > Launch Profile):
+  extra arguments inserted on every launch in that project - auto-resume, context-menu
+  resume, session history, new Claude tabs. Validated against a strict allowlist; session
+  selection flags are rejected.
+- Session registry for external tools: the hook script maintains
+  `~/.claude/ide-events/sessions/<session_id>.json` with `state` (`idle` / `busy` /
+  `waiting` on a permission prompt), `cwd`, `pid`, `updated_at`, and the IDE `project` and
+  `tab` the plugin bound the session to. Files are written atomically, removed on
+  SessionEnd and on project close, swept after 24 h.
+- Hook installer registers the script for SessionStart, UserPromptSubmit, PreToolUse,
+  Notification (permission_prompt), Stop and SessionEnd, merging next to other tools'
+  entries. The settings page reports an outdated script and offers the upgrade.
+- `docs/` (PRD, roadmap, plans, runbooks) and `scripts/audit-bindings.py`.
+
+### Fixed
+- After an IDE restart every bound tab launches Claude, not only the selected tab of each
+  project. The reworked terminal starts restored tabs' shells lazily on first display and
+  buffers sent text until then; the plugin now shows each restored tab once.
+
+### Removed
+- The experimental Agent Teams module (dashboard, teammate tabs, settings page, actions).
+- The `sessions.jsonl` append in the hook script (never pruned, never read).
+
+## [0.6.6] - 2026-08-26
+
+### Fixed
+- A tab that reuses an existing binding (reopened terminal matched by name, or a session
+  change in an already bound tab) now gets the Claude icon and tab-title protection too.
+
+## [0.6.5] - 2026-08-05
+
+### Fixed
+- Hook events can no longer move a session away from the live tab that owns it
+  (multi-project resume storms fired each tab's SessionStart event at the selected tab).
+- Duplicate-session cleanup reverts the losing binding to its own history instead of
+  deleting it.
+
+## [0.6.4] - 2026-08-05
+
+### Fixed
+- Resume falls back through the binding's session history to the newest id with a
+  transcript instead of reporting an unpersisted current id as purged.
+
+## [0.6.3] - 2026-08-05
+
+### Fixed
+- "Start new session" binds the new session even when clicked during the startup
+  suppression window.
+- Title tracking flag resolved reflectively (removed from the platform in 2026.2).
+
+## [0.6.2] - 2026-08-04
+
+### Added
+- Claude's live progress surfaced as an activity badge on the tab icon and the tab
+  tooltip; the tab keeps its name and colored icon.
+
+### Fixed
+- Duplicate bindings no longer send the resume command twice on startup.
+- Purged sessions are not blindly resumed; a notification offers a fresh session or
+  removing the binding.
+
+## [0.6.1] - 2026-08-04
+
+### Fixed
+- "Protect bound tab names" works on the reworked terminal (2026.1).
+
+## [0.6.0] - 2026-08-04
+
+### Added
+- Restart-stable tab identity via the terminal-persisted tab name; auto-resume waits for
+  tab restoration; "Protect bound tab names" setting.
+
 ## [0.5.0] - 2026-06-15
 
 ### Fixed

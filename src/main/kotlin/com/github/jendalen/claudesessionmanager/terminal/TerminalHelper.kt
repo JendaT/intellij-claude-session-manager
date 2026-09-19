@@ -1,8 +1,9 @@
 package com.github.jendalen.claudesessionmanager.terminal
 
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
+import com.github.jendalen.claudesessionmanager.services.ProjectSettingsService
 import com.github.jendalen.claudesessionmanager.services.SettingsService
-import com.github.jendalen.claudesessionmanager.util.SessionIdValidator
+import com.github.jendalen.claudesessionmanager.util.LaunchCommand
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.PlatformDataKeys
@@ -46,13 +47,6 @@ object TerminalHelper {
     private val logger = Logger.getInstance(TerminalHelper::class.java)
 
     /**
-     * Key to mark terminal tabs as team-managed.
-     * V1.0 services check this via [isTeamTab] to avoid interfering with team tabs.
-     * V2.0 services set this via Content.putUserData().
-     */
-    val TEAM_TAB_KEY = Key.create<String>("ClaudeTeams.TeamTab")
-
-    /**
      * Stable per-tab identity stored in the tab's Content UserData.
      *
      * This is the primary key used to match terminal tabs to session bindings. Unlike the
@@ -94,13 +88,6 @@ object TerminalHelper {
     fun isDecorated(content: Content): Boolean = content.getUserData(DECORATED_KEY) == true
 
     fun markDecorated(content: Content) = content.putUserData(DECORATED_KEY, true)
-
-    /**
-     * Checks if a terminal tab Content is managed by the team system.
-     */
-    fun isTeamTab(content: Content): Boolean {
-        return content.getUserData(TEAM_TAB_KEY) != null
-    }
 
     /**
      * Returns the stable tab id for a Content, generating and storing one if absent.
@@ -558,32 +545,43 @@ object TerminalHelper {
     }
 
     /**
-     * Gets the configured Claude command.
+     * Gets the configured Claude command (application setting, no project flags).
      */
     fun getClaudeCommand(): String {
         return SettingsService.getInstance().claudeCommand
     }
 
     /**
-     * Builds the resume command using the configured Claude command.
-     * Validates session ID to prevent command injection.
+     * The project's extra launch arguments (launch profile), already validated.
+     */
+    fun getExtraLaunchArgs(project: Project): String {
+        return ProjectSettingsService.getInstance(project).extraLaunchArgs
+    }
+
+    /**
+     * Builds `claude [extraArgs] --resume <id>` for [project]. Every path that types a
+     * resume into a terminal goes through here so the launch profile is never skipped -
+     * a flag like a development channel is per project and must apply to auto-resume,
+     * context-menu resume, history restore and new-tab creation alike.
      *
      * @throws IllegalArgumentException if sessionId is not a valid UUID
      */
-    fun buildResumeCommand(sessionId: String): String {
-        // SECURITY: Validate session ID to prevent command injection
-        require(SessionIdValidator.isValid(sessionId)) {
-            "Invalid session ID format: $sessionId"
-        }
-        // Session ID is now guaranteed to be a valid UUID (alphanumeric + hyphens only)
-        return "${getClaudeCommand()} --resume $sessionId"
+    fun buildResumeCommand(project: Project, sessionId: String): String {
+        return LaunchCommand.resume(getClaudeCommand(), getExtraLaunchArgs(project), sessionId)
+    }
+
+    /**
+     * Builds `claude [extraArgs]` - a fresh session in [project].
+     */
+    fun buildStartCommand(project: Project): String {
+        return LaunchCommand.start(getClaudeCommand(), getExtraLaunchArgs(project))
     }
 
     /**
      * Resumes a Claude session in the given terminal.
      */
-    fun resumeClaudeSession(widget: ShellTerminalWidget, sessionId: String): Boolean {
-        val command = buildResumeCommand(sessionId)
+    fun resumeClaudeSession(project: Project, widget: ShellTerminalWidget, sessionId: String): Boolean {
+        val command = buildResumeCommand(project, sessionId)
         return executeCommandInWidget(widget, command)
     }
 
@@ -592,7 +590,7 @@ object TerminalHelper {
      * This is designed to work from context menu actions where DataContext doesn't have terminal info.
      */
     fun executeCommandInTerminal(project: Project, context: TerminalTabContext, sessionId: String): Boolean {
-        val command = buildResumeCommand(sessionId)
+        val command = buildResumeCommand(project, sessionId)
 
         // APPROACH 1 (BEST): Match by stable tab id, falling back to name. Matching by name
         // alone is unreliable now that Claude Code renames every tab to "Claude Code".
@@ -670,14 +668,6 @@ object TerminalHelper {
 
         logger.warn("All approaches failed to execute command in terminal '${context.tabName}'")
         return false
-    }
-
-    /**
-     * Resumes a Claude session using action event context.
-     */
-    fun resumeClaudeSession(e: AnActionEvent, sessionId: String): Boolean {
-        val command = buildResumeCommand(sessionId)
-        return executeCommand(e, command)
     }
 
     /**

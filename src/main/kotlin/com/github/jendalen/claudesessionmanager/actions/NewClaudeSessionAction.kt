@@ -53,7 +53,7 @@ class NewClaudeSessionAction : AnAction() {
         val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, alarmDisposable)
         alarm.addRequest({
             try {
-                TerminalHelper.resumeClaudeSession(widget, selectedSession.sessionId)
+                TerminalHelper.resumeClaudeSession(project, widget, selectedSession.sessionId)
                 bindingService.findBindingForTab(tabIdentifier)?.let {
                     bindingService.markBindingResumed(it.id)
                 }

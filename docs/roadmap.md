@@ -1,0 +1,94 @@
+---
+type: roadmap
+last_updated: 2026-09-17
+---
+
+# Claude Session Manager - roadmap
+
+Operational source of truth for what is next. Update on feature completion and when
+discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
+
+## Shipped (summary)
+
+- [x] v0.5.0 - stable tab id identity; migration of name-only bindings; "keep my tab
+  names" toggle.
+- [x] v0.6.0-0.6.2 - restart-stable persistent name; single write path
+  (`TabBindingCoordinator`); title protection; live progress badge instead of the IDE's
+  asterisk title; 261 floor.
+- [x] v0.6.3-0.6.6 - resume-storm hardening: user-action bypass of the suppression
+  window, history fallback for unpersisted ids, hook events cannot move sessions between
+  live tabs, dedup reverts instead of deleting, decoration on the reuse-existing path.
+  Verified across the 2026.1 -> 2026.2 IDE update with ~19 sessions preserved.
+
+## In flight
+
+- [~] **External session control** (2026-09-17): hand-off
+  `docs/handoffs/2026-09-16-external-session-control.md`, plan
+  `docs/plans/2026-09-17-external-session-control-plan.md`. Code complete as v0.7.0
+  (per-project extra launch args, session registry with idle/busy/waiting state and pid
+  under `~/.claude/ide-events/sessions/`, eager launch of every restored tab, teams
+  module removed); installed in both IDEs, awaiting live verification after restart and
+  the hook reinstall.
+
+## Backlog
+
+- [ ] v0.6.6 GitHub release - cut once the reuse-existing decoration fix is confirmed
+  live (expected: the renamed acme-server tab comes back as "Local (2)" with the icon).
+- [x] `CHANGELOG.md` backfilled 0.6.0-0.7.0 (2026-09-17); keep it in sync with the
+  `plugin.xml` change-notes from now on.
+- [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).
+- [x] `sessions.jsonl` append removed from the hook script (v0.7.0). The 1.1 MB file on
+  disk can be deleted by hand; nothing reads it.
+- [x] Tests: 48 across validators, command assembly, resume fallback, hook installer,
+  registry service and the hook script itself (run under bash + jq).
+- [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` once the v2 hook is live.
+- [ ] Orphaned bindings whose tabs were closed weeks ago survive every restart (4 of 23
+  in the 2026-08-05 audit) until dismissed via the missing-tabs notification. Consider
+  auto-expiry driven by `orphanedHistoryRetentionDays`.
+- [ ] Hook latency: ~22 ms per PreToolUse invocation measured on the development Mac
+  (one jq call, pid lookup only when the file lacks one). Revisit only if it becomes
+  visible in tool-call turnaround.
+- [ ] Registry `waiting` covers permission prompts only; MCP elicitation dialogs
+  (`notification_type: elicitation_dialog`) also block a session and could map to the
+  same state.
+- [ ] **Do not resume a session that is running elsewhere.** 2026-09-19: WebStorm
+  resumed `4e695d61` (a stale Shop binding) while IDEA was already running it - two
+  processes on one transcript. Bindings are per project per IDE and nothing checks for
+  a live process before typing the resume command. The registry has what is needed:
+  read `sessions/<id>.json` first; a live `pid` (`kill -0`) with a different `cwd` means
+  the session is running elsewhere - skip it, log which project/tab owns it, and leave
+  the tab alone. Plan defect 1.
+- [ ] **Output channel needs the cwd guard the hook channel already has.** It binds a
+  tab to ANY session UUID printed in that tab's output if a transcript exists anywhere
+  (`sessionFileExists` is global). Printing another session's id - a `cat` of a registry
+  file, a grep of a log, an orchestrator inspecting its workers - rebinds the tab and then
+  writes the wrong `project`/`tab` into that session's registry file. Source the
+  session's cwd from the transcript's directory (`~/.claude/projects/<encoded cwd>/`,
+  directory-boundary compare against the encoded project path) or the registry `cwd`,
+  and reject a mismatch the same way `ClaudeHookEventService` does. Plan defect 3.
+- [ ] **`registerSession` on the suppressed-existing bind path.** During the 15 s
+  auto-resume window an existing binding is returned without publishing to the registry,
+  so a session whose only output-channel confirmation lands inside the window never gets
+  `project`/`tab`. Publishing an unchanged binding is safe there. One line. Plan defect 2.
+- [ ] **Resume-failure detector.** `AutoResumeService` logs "Auto-resumed session X in
+  tab Y" when `executeCommandInTerminal` returns true - i.e. when the text reached the
+  terminal. It never checks that Claude started, so a project trust dialog or a malformed
+  `extraLaunchArgs` value logs as a clean resume. The registry makes this cheap to
+  detect: no `~/.claude/ide-events/sessions/<id>.json` ~15 s after the resume means no
+  SessionStart hook fired, so Claude never started. Log a warning naming the tab and the
+  session. Note this is a different check from section 3's "did not start within", which
+  polls `TerminalView.sessionState` - that is the SHELL; a session stopped at a dialog
+  has a started shell with Claude sitting at a prompt.
+
+  Scope note (2026-09-19): this does NOT cover the development-channels dialog, which
+  fires on every launch rather than once - a per-launch stall is not something a detector
+  fixes, it just reports N of them per restart. That case is closed by using
+  `--channels` with a managed-settings allowlist instead of the dev flag (plan decision
+  5); the detector remains worth having for the one-off cases above.
+
+## Architectural / meta
+
+- IntelliJ IDEA moved to 2026.2 (config dir `IntelliJIdea2026.2`); the 2026.1 dirs of
+  both IDEs are obsolete.
+- JetBrains Marketplace publishing has never been done (`publishing.token` wired in
+  Gradle, no signing certs configured).

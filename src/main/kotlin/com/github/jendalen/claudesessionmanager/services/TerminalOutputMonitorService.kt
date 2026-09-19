@@ -140,13 +140,6 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
     private fun monitorTab(tab: TerminalToolWindowTab) {
         val content = tab.content
 
-        // Team-managed tabs never bind through this channel (the coordinator skips them),
-        // so scanning their output - the chattiest terminals around - is wasted work.
-        if (TerminalHelper.isTeamTab(content)) {
-            logger.debug("Skipping team-managed tab '${content.displayName}'")
-            return
-        }
-
         // Stable id is the monitoring key; survives Claude Code renaming the tab.
         val tabId = TerminalHelper.getOrCreateTabId(content)
         val tabName = content.displayName ?: "Terminal"
@@ -221,6 +214,12 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                             val binding = bindingService.findBindingByTabUuid(tabId)
                             if (binding != null && binding.tabIdentifier.persistentName != persistentName) {
                                 bindingService.updatePersistentName(binding.id, persistentName)
+                                // External readers see the rename too.
+                                val sessionId = binding.currentSessionId
+                                val projectName = project.name
+                                ApplicationManager.getApplication().executeOnPooledThread {
+                                    SessionRegistryService.getInstance().upsert(sessionId, projectName, persistentName)
+                                }
                             }
                         }
                     }

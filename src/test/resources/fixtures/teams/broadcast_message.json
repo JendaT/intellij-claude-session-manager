@@ -1,8 +1,0 @@
-{
-  "type": "broadcast",
-  "sender": "team-lead",
-  "recipient": "",
-  "content": "All members: please pull latest changes",
-  "timestamp": 1706000200000,
-  "summary": "Pull latest changes"
-}

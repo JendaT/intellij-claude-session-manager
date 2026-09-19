@@ -200,8 +200,8 @@ class PluginSettingsConfigurable : Configurable {
         // Update details
         detailsArea?.text = buildString {
             appendLine("=== Integration Status ===")
-            appendLine("Hook script: ${if (status.hookScriptExists) "Exists" else "Missing"}")
-            appendLine("Hook in settings.json: ${if (status.hookInSettings) "Configured" else "Not configured"}")
+            appendLine("Hook script: ${if (!status.hookScriptExists) "Missing" else if (status.hookScriptCurrent) "Current" else "Outdated"}")
+            appendLine("Hook in settings.json: ${if (status.hookInSettings) "Configured for all events" else "Missing for: ${status.missingEvents.joinToString(", ")}"}")
             appendLine()
             appendLine("=== Paths ===")
             appendLine("Settings: ${status.settingsPath}")
@@ -220,8 +220,8 @@ class PluginSettingsConfigurable : Configurable {
             appendLine(hookManager.hookScriptContent)
 
             appendLine()
-            appendLine("=== Settings.json Entry ===")
-            appendLine("When installed, this entry will be added to hooks.SessionStart:")
+            appendLine("=== Settings.json Entries ===")
+            appendLine("When installed, these entries are merged into ~/.claude/settings.json (other hooks are left untouched):")
             appendLine()
             appendLine(hookManager.hookConfig)
         }
@@ -234,10 +234,13 @@ class PluginSettingsConfigurable : Configurable {
         val result = Messages.showOkCancelDialog(
             """
             This will:
-            1. Create a hook script at ~/.claude/hooks/session-notify.sh
-            2. Add a SessionStart hook entry to ~/.claude/settings.json
+            1. Create (or update) the hook script at ~/.claude/hooks/session-notify.sh
+            2. Add hook entries to ~/.claude/settings.json for SessionStart, UserPromptSubmit,
+               PreToolUse, Notification (permission prompts), Stop and SessionEnd.
+               Existing entries of other tools are kept.
 
-            The hook allows the plugin to detect when Claude sessions start or change.
+            The hooks let the plugin detect sessions and keep a per-session state file
+            (idle / busy / waiting) under ~/.claude/ide-events/sessions/ for external tools.
             You can review the exact content in "Integration Details" above.
 
             Proceed with installation?
@@ -251,6 +254,7 @@ class PluginSettingsConfigurable : Configurable {
         if (result == Messages.OK) {
             val (success, error) = hookManager.installHooks()
             if (success) {
+                com.github.jendalen.claudesessionmanager.services.SessionRegistryService.getInstance().sweep()
                 Messages.showInfoMessage("Hooks installed successfully.", "Success")
             } else {
                 Messages.showErrorDialog("Failed to install hooks: $error", "Error")
@@ -265,7 +269,7 @@ class PluginSettingsConfigurable : Configurable {
     private fun revertHooks() {
         val deleteScript = Messages.showYesNoCancelDialog(
             """
-            This will remove the SessionStart hook entry from ~/.claude/settings.json.
+            This will remove the plugin's hook entries from ~/.claude/settings.json.
 
             Do you also want to delete the hook script file?
             - Yes: Remove from settings AND delete the script file

@@ -126,11 +126,6 @@ class TabBindingCoordinator(private val project: Project) {
                 logger.warn("Bind rejected: invalid session ID format (source=$source)")
                 return null
             }
-            // Team-managed tabs have their own binding lifecycle (v2.0).
-            if (TerminalHelper.isTeamTab(content)) {
-                logger.info("Bind skipped: team-managed tab (session=$sessionId, source=$source)")
-                return null
-            }
             val tabName = content.displayName
             if (tabName.isNullOrBlank()) {
                 logger.info("Bind skipped: tab has no display name (session=$sessionId, source=$source)")
@@ -195,6 +190,7 @@ class TabBindingCoordinator(private val project: Project) {
                 } else {
                     logger.info("Session $sessionId already bound to '$tabName' (source=$source)")
                 }
+                registerSession(sessionId, persistentName ?: tabName, workingDirectory)
                 return bindingService.findBindingById(existing.id)
             }
 
@@ -218,6 +214,7 @@ class TabBindingCoordinator(private val project: Project) {
                         bindingService.updateBindingSession(stale.id, sessionId)
                     }
                     applyTabSideEffects(content)
+                    registerSession(sessionId, persistentName, workingDirectory)
                     logger.info("Adopted stale binding ${stale.id} ('$persistentName') for tab '$tabName' -> session $sessionId (source=$source)")
                     if (settings.notifyOnAutoDetection) {
                         notify("Claude session reconnected", "Re-attached '$persistentName' to: $info (via $source)")
@@ -247,6 +244,7 @@ class TabBindingCoordinator(private val project: Project) {
             val binding = bindingService.createBinding(identifier, sessionId)
             logger.info("Auto-bound tab '$tabName' to session $sessionId (source=$source)")
             applyTabSideEffects(content)
+            registerSession(sessionId, persistentName ?: tabName, workingDirectory)
             if (settings.notifyOnAutoDetection) {
                 notify("Claude session detected", "Auto-bound '$tabName' to: $info (via $source)")
             }
@@ -254,6 +252,20 @@ class TabBindingCoordinator(private val project: Project) {
         } catch (e: Exception) {
             logger.warn("Failed to bind session $sessionId (source=$source): ${e.message}", e)
             return null
+        }
+    }
+
+    /**
+     * Publishes project and tab for the session to the registry read by external tools.
+     * The tab is the persistent name (what the user named it), never the OSC-polluted
+     * display name. Off the EDT: the write is a small file operation but the output
+     * channel re-confirms bindings every few seconds and the EDT must not pay for it.
+     */
+    private fun registerSession(sessionId: String, tab: String, cwd: String?) {
+        val projectName = project.name
+        val basePath = cwd ?: project.basePath
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            SessionRegistryService.getInstance().upsert(sessionId, projectName, tab, basePath)
         }
     }
 

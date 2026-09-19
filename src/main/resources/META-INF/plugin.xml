@@ -12,10 +12,12 @@
         <b>Features:</b>
         <ul>
             <li>Bind sessions to tabs automatically or manually</li>
-            <li>Auto-resume on IDE restart</li>
+            <li>Auto-resume on IDE restart - every bound tab, no click needed</li>
             <li>Session history per tab</li>
             <li>Detects /clear, /compact, /resume changes</li>
-            <li>Agent Teams: team dashboard, teammate tabs, task tracking</li>
+            <li>Per-project launch profile (extra Claude launch arguments)</li>
+            <li>Session registry (~/.claude/ide-events/sessions/) with idle/busy/waiting
+                state for external tools</li>
         </ul>
 
         <b>Setup:</b> After installation, go to Settings > Tools > Claude Session Manager
@@ -23,6 +25,25 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.7.0</h3>
+        <ul>
+            <li>New: per-project launch profile (Settings > Tools > Claude Session Manager >
+                Launch Profile). Extra arguments are inserted on every launch in that project:
+                auto-resume, context-menu resume, session history, new Claude tabs.</li>
+            <li>New: session registry for external tools. The hook script maintains one file
+                per live session under ~/.claude/ide-events/sessions/ with its state
+                (idle / busy / waiting on a permission prompt), working directory, pid, and
+                the IDE project and tab the plugin bound it to. Reinstall the hooks from the
+                settings page to enable it (the installer merges its entries next to other
+                tools' hooks and never overwrites settings.json).</li>
+            <li>Fixed: after an IDE restart every bound tab now launches Claude, not only the
+                selected tab of each project. Restored terminal tabs start their shell lazily
+                on first display; the plugin now shows each restored tab once so the queued
+                resume command runs.</li>
+            <li>Removed: the experimental Agent Teams module (dashboard, teammate tabs,
+                settings page). Subagents are managed inside one session now.</li>
+        </ul>
+
         <h3>0.6.6</h3>
         <ul>
             <li>Fixed: a tab that reuses an existing binding (reopened terminal matched by
@@ -190,56 +211,28 @@
             id="com.github.jendalen.claudesessionmanager.settings"
             displayName="Claude Session Manager"/>
 
+        <!-- Per-project launch profile (extra launch args), nested under the app page.
+             ProjectSettingsService is a light service (@Service) - not registered here. -->
+        <projectConfigurable
+            parentId="com.github.jendalen.claudesessionmanager.settings"
+            instance="com.github.jendalen.claudesessionmanager.settings.ProjectSettingsConfigurable"
+            id="com.github.jendalen.claudesessionmanager.settings.project"
+            displayName="Launch Profile"
+            nonDefaultProject="true"/>
+
         <!-- Notifications -->
         <notificationGroup id="ClaudeSessionManager" displayType="BALLOON"/>
 
         <!-- Auto-resume sessions on IDE startup -->
         <backgroundPostStartupActivity
             implementation="com.github.jendalen.claudesessionmanager.services.AutoResumeService"/>
-
-        <!-- ===================== v2.0 Agent Teams ===================== -->
-
-        <!-- Application-level services -->
-        <applicationService
-            serviceInterface="com.github.jendalen.claudesessionmanager.teams.services.TeamsSettingsService"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.teams.services.TeamsSettingsService"/>
-
-        <!-- Project-level services -->
-        <projectService
-            serviceInterface="com.github.jendalen.claudesessionmanager.teams.services.TeamStateParser"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.teams.services.TeamStateParser"/>
-
-        <projectService
-            serviceInterface="com.github.jendalen.claudesessionmanager.teams.services.FileSystemTeamWatcher"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.teams.services.FileSystemTeamWatcher"/>
-
-        <projectService
-            serviceInterface="com.github.jendalen.claudesessionmanager.teams.services.AgentTeamsManager"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.teams.services.AgentTeamsManager"/>
-
-        <projectService
-            serviceInterface="com.github.jendalen.claudesessionmanager.teams.TeamNotificationService"
-            serviceImplementation="com.github.jendalen.claudesessionmanager.teams.TeamNotificationService"/>
-
-        <!-- Agent Teams settings (nested under Claude Session Manager) -->
-        <applicationConfigurable
-            parentId="com.github.jendalen.claudesessionmanager.settings"
-            instance="com.github.jendalen.claudesessionmanager.teams.settings.TeamsSettingsConfigurable"
-            id="com.github.jendalen.claudesessionmanager.teams.settings"
-            displayName="Agent Teams"/>
-
-        <!-- Team Dashboard tool window -->
-        <toolWindow
-            id="Claude Teams"
-            anchor="right"
-            secondary="true"
-            icon="/icons/claude-teams.svg"
-            factoryClass="com.github.jendalen.claudesessionmanager.teams.ui.TeamDashboardToolWindowFactory"/>
-
-        <!-- Team watcher startup -->
-        <backgroundPostStartupActivity
-            implementation="com.github.jendalen.claudesessionmanager.teams.TeamWatcherStartupActivity"/>
     </extensions>
+
+    <applicationListeners>
+        <!-- Drops the closing project's sessions from ~/.claude/ide-events/sessions/ -->
+        <listener class="com.github.jendalen.claudesessionmanager.services.RegistryProjectCloseListener"
+                  topic="com.intellij.openapi.project.ProjectCloseListener"/>
+    </applicationListeners>
 
     <!-- Terminal plugin extensions -->
     <extensions defaultExtensionNs="org.jetbrains.plugins.terminal">
@@ -307,50 +300,5 @@
                 class="com.github.jendalen.claudesessionmanager.actions.NewClaudeSessionAction"
                 text="New Claude Session"
                 description="Create a new terminal with a Claude session"/>
-
-        <!-- ===================== v2.0 Agent Teams Actions ===================== -->
-
-        <!-- Navigate to teammate popup picker -->
-        <action id="ClaudeTeams.NavigateToTeammate"
-                class="com.github.jendalen.claudesessionmanager.teams.actions.NavigateToTeammateAction"
-                text="Navigate to Teammate..."
-                description="Open a picker to navigate to a teammate's terminal tab">
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift alt T"/>
-        </action>
-
-        <!-- Toggle dashboard -->
-        <action id="ClaudeTeams.ToggleDashboard"
-                class="com.github.jendalen.claudesessionmanager.teams.actions.ToggleDashboardAction"
-                text="Toggle Team Dashboard"
-                description="Show or hide the Claude Teams dashboard">
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift alt D"/>
-        </action>
-
-        <!-- Navigate to team lead -->
-        <action id="ClaudeTeams.NavigateToTeamLead"
-                class="com.github.jendalen.claudesessionmanager.teams.actions.NavigateToTeamLeadAction"
-                text="Navigate to Team Lead"
-                description="Navigate to the team lead's terminal tab">
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift alt 1"/>
-        </action>
-
-        <!-- Team context menu actions -->
-        <group id="ClaudeTeams.TeammatePopup"
-               class="com.github.jendalen.claudesessionmanager.teams.actions.TeamPopupActionGroup"
-               text="Claude Team"
-               description="Agent team actions"
-               popup="true">
-            <add-to-group group-id="ToolWindowContextMenu" anchor="after"
-                          relative-to-action="ClaudeSessionManager.TerminalPopup"/>
-
-            <reference ref="ClaudeTeams.ToggleDashboard"/>
-            <reference ref="ClaudeTeams.NavigateToTeammate"/>
-            <reference ref="ClaudeTeams.NavigateToTeamLead"/>
-            <separator/>
-            <action id="ClaudeTeams.CopyAgentId"
-                    class="com.github.jendalen.claudesessionmanager.teams.actions.CopyAgentIdAction"
-                    text="Copy Agent ID"
-                    description="Copy the teammate's agent ID to clipboard"/>
-        </group>
     </actions>
 </idea-plugin>

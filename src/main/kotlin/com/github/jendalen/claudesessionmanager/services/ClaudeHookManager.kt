@@ -7,14 +7,20 @@ import kotlinx.serialization.json.*
 import java.io.File
 
 /**
- * Manages Claude Code hook integration for session detection.
+ * Manages Claude Code hook integration for session detection and the session registry.
  *
- * The plugin requires a SessionStart hook in Claude's settings.json that writes
- * session events to a known location. This service handles:
- * - Checking if hooks are installed
+ * The plugin installs one hook script and registers it for several Claude Code events:
+ * SessionStart (session detection, as before) plus UserPromptSubmit, PreToolUse,
+ * Notification (permission_prompt), Stop and SessionEnd, which maintain the per-session
+ * state files under ~/.claude/ide-events/sessions/ that external tools read. This
+ * service handles:
+ * - Checking if hooks are installed and current
  * - Installing hooks (modifying settings.json + creating hook script)
  * - Reverting hooks (removing from settings.json)
  * - Showing what exactly was modified for transparency
+ *
+ * settings.json is shared with other tools' hooks under the same events: entries are
+ * merged in and removed individually, the rest of the file is never rewritten.
  */
 @Service(Service.Level.APP)
 class ClaudeHookManager {
@@ -23,7 +29,23 @@ class ClaudeHookManager {
 
     companion object {
         private const val HOOK_SCRIPT_NAME = "session-notify.sh"
-        private const val HOOK_MARKER = "# Claude Session Manager Plugin Hook"
+        private const val HOOK_SCRIPT_RESOURCE = "/hooks/session-notify.sh"
+        private const val HOOK_VERSION_MARKER = "# csm-hook-version: 2"
+        private const val HOOK_TIMEOUT_SECONDS = 5
+
+        /**
+         * Events the script is registered for, with the matcher each entry carries
+         * (null = no matcher key: the event has no matcher or all values are wanted).
+         * SessionStart keeps "*" for compatibility with existing installs.
+         */
+        val HOOK_EVENTS: List<Pair<String, String?>> = listOf(
+            "SessionStart" to "*",
+            "UserPromptSubmit" to null,
+            "PreToolUse" to null,
+            "Notification" to "permission_prompt",
+            "Stop" to null,
+            "SessionEnd" to null
+        )
 
         fun getInstance(): ClaudeHookManager {
             return com.intellij.openapi.application.ApplicationManager.getApplication()
@@ -32,95 +54,92 @@ class ClaudeHookManager {
     }
 
     /**
-     * The hook script content that writes session events to ide-events directory.
+     * The hook script content, bundled as a plugin resource.
      */
-    val hookScriptContent: String = """
-        |#!/bin/bash
-        |$HOOK_MARKER
-        |# This script notifies the IDE plugin about Claude session events.
-        |# It writes session info to ~/.claude/ide-events/ for the plugin to watch.
-        |
-        |INPUT=${'$'}(cat)
-        |SESSION_ID=${'$'}(echo "${'$'}INPUT" | jq -r '.session_id // empty')
-        |SOURCE=${'$'}(echo "${'$'}INPUT" | jq -r '.source // empty')
-        |CWD=${'$'}(echo "${'$'}INPUT" | jq -r '.cwd // empty')
-        |
-        |# Get timestamp in milliseconds
-        |if [[ "${'$'}OSTYPE" == "darwin"* ]]; then
-        |  if command -v gdate &> /dev/null; then
-        |    TIMESTAMP=${'$'}(gdate +%s%3N)
-        |  else
-        |    TIMESTAMP=${'$'}(python3 -c 'import time; print(int(time.time() * 1000))')
-        |  fi
-        |else
-        |  TIMESTAMP=${'$'}(date +%s%3N)
-        |fi
-        |
-        |if [ -n "${'$'}SESSION_ID" ]; then
-        |  EVENTS_DIR="${'$'}HOME/.claude/ide-events"
-        |  mkdir -p "${'$'}EVENTS_DIR"
-        |
-        |  # Write current session for plugin to detect
-        |  jq -n --arg ts "${'$'}TIMESTAMP" --arg sid "${'$'}SESSION_ID" --arg src "${'$'}SOURCE" --arg cwd "${'$'}CWD" \
-        |    '{"timestamp":(${'$'}ts|tonumber),"sessionId":${'$'}sid,"source":${'$'}src,"cwd":${'$'}cwd}' > "${'$'}EVENTS_DIR/current-session.json"
-        |fi
-        |
-        |exit 0
-    """.trimMargin()
+    val hookScriptContent: String by lazy {
+        ClaudeHookManager::class.java.getResourceAsStream(HOOK_SCRIPT_RESOURCE)
+            ?.bufferedReader()?.use { it.readText() }
+            ?: error("Bundled hook script missing: $HOOK_SCRIPT_RESOURCE")
+    }
 
     /**
-     * The hook configuration that goes into settings.json
+     * The entries that go into settings.json, one per event, for display.
      */
-    val hookConfig: String = """
-        |{
-        |  "matcher": "*",
-        |  "hooks": [
-        |    {
-        |      "type": "command",
-        |      "command": "${'$'}HOME/.claude/hooks/$HOOK_SCRIPT_NAME"
-        |    }
-        |  ]
-        |}
-    """.trimMargin()
+    val hookConfig: String by lazy {
+        val pretty = Json { prettyPrint = true }
+        HOOK_EVENTS.joinToString("\n\n") { (event, matcher) ->
+            "hooks.$event:\n" + pretty.encodeToString(JsonObject.serializer(), hookEntry(matcher))
+        }
+    }
+
+    private fun hookEntry(matcher: String?): JsonObject = buildJsonObject {
+        if (matcher != null) put("matcher", matcher)
+        putJsonArray("hooks") {
+            addJsonObject {
+                put("type", "command")
+                put("command", "\$HOME/.claude/hooks/$HOOK_SCRIPT_NAME")
+                put("timeout", HOOK_TIMEOUT_SECONDS)
+            }
+        }
+    }
+
+    private fun JsonElement.isOurEntry(): Boolean {
+        val hooksList = (this as? JsonObject)?.get("hooks")?.jsonArray ?: return false
+        return hooksList.any { hook ->
+            val command = (hook as? JsonObject)?.get("command")?.jsonPrimitive?.contentOrNull ?: ""
+            command.contains(HOOK_SCRIPT_NAME)
+        }
+    }
 
     data class IntegrationStatus(
         val isInstalled: Boolean,
         val hookScriptExists: Boolean,
+        val hookScriptCurrent: Boolean,
         val hookInSettings: Boolean,
         val hookScriptPath: String,
         val settingsPath: String,
+        val missingEvents: List<String> = emptyList(),
         val issues: List<String> = emptyList()
     )
 
     /**
-     * Check the current integration status.
+     * Check the current integration status. "Installed" means the bundled script version
+     * is on disk and every event has our entry - an older script or a partial entry set
+     * (e.g. a v1 install with SessionStart only) reports as not installed so the settings
+     * page offers the upgrade.
      */
-    fun getIntegrationStatus(): IntegrationStatus {
-        val claudeHome = ClaudePathResolver.getClaudeHome()
+    fun getIntegrationStatus(claudeHome: File = ClaudePathResolver.getClaudeHome()): IntegrationStatus {
         val settingsFile = File(claudeHome, "settings.json")
         val hookScript = File(claudeHome, "hooks/$HOOK_SCRIPT_NAME")
         val issues = mutableListOf<String>()
 
-        // Check if script exists and writes to ide-events (compatible with manual installs too)
-        val hookScriptExists = hookScript.exists() && hookScript.readText().contains("ide-events")
-        val hookInSettings = checkHookInSettings(settingsFile)
+        val scriptText = if (hookScript.exists()) hookScript.readText() else ""
+        val hookScriptExists = scriptText.contains("ide-events")
+        val hookScriptCurrent = scriptText.contains(HOOK_VERSION_MARKER)
+        val missingEvents = HOOK_EVENTS.map { it.first }.filterNot { checkHookInSettings(settingsFile, it) }
+        val hookInSettings = missingEvents.isEmpty()
 
         if (!settingsFile.exists()) {
             issues.add("Claude settings.json not found - is Claude CLI installed?")
         }
-        if (hookScriptExists && !hookInSettings) {
-            issues.add("Hook script exists but not configured in settings.json")
+        if (hookScriptExists && !hookScriptCurrent) {
+            issues.add("Hook script is an older version - reinstall to enable the session registry")
         }
-        if (hookInSettings && !hookScriptExists) {
+        if (hookScriptExists && missingEvents.isNotEmpty()) {
+            issues.add("Hook not configured in settings.json for: ${missingEvents.joinToString(", ")}")
+        }
+        if (missingEvents.size < HOOK_EVENTS.size && !hookScriptExists) {
             issues.add("Hook configured in settings.json but script missing")
         }
 
         return IntegrationStatus(
-            isInstalled = hookScriptExists && hookInSettings,
+            isInstalled = hookScriptExists && hookScriptCurrent && hookInSettings,
             hookScriptExists = hookScriptExists,
+            hookScriptCurrent = hookScriptCurrent,
             hookInSettings = hookInSettings,
             hookScriptPath = hookScript.absolutePath,
             settingsPath = settingsFile.absolutePath,
+            missingEvents = missingEvents,
             issues = issues
         )
     }
@@ -129,9 +148,8 @@ class ClaudeHookManager {
      * Install the hooks (script + settings.json entry).
      * Returns success and any error message.
      */
-    fun installHooks(): Pair<Boolean, String?> {
+    fun installHooks(claudeHome: File = ClaudePathResolver.getClaudeHome()): Pair<Boolean, String?> {
         try {
-            val claudeHome = ClaudePathResolver.getClaudeHome()
             val settingsFile = File(claudeHome, "settings.json")
             val hooksDir = File(claudeHome, "hooks")
             val hookScript = File(hooksDir, HOOK_SCRIPT_NAME)
@@ -166,9 +184,11 @@ class ClaudeHookManager {
      * Remove the hooks (settings.json entry only, keeps script for safety).
      * Returns success and any error message.
      */
-    fun revertHooks(deleteScript: Boolean = false): Pair<Boolean, String?> {
+    fun revertHooks(
+        deleteScript: Boolean = false,
+        claudeHome: File = ClaudePathResolver.getClaudeHome()
+    ): Pair<Boolean, String?> {
         try {
-            val claudeHome = ClaudePathResolver.getClaudeHome()
             val settingsFile = File(claudeHome, "settings.json")
             val hookScript = File(claudeHome, "hooks/$HOOK_SCRIPT_NAME")
 
@@ -195,24 +215,15 @@ class ClaudeHookManager {
     }
 
     /**
-     * Check if our hook is configured in settings.json
+     * Check if our hook is configured in settings.json for [event].
      */
-    private fun checkHookInSettings(settingsFile: File): Boolean {
+    private fun checkHookInSettings(settingsFile: File, event: String): Boolean {
         if (!settingsFile.exists()) return false
 
         return try {
-            val content = settingsFile.readText()
-            val json = Json.parseToJsonElement(content).jsonObject
-            val hooks = json["hooks"]?.jsonObject ?: return false
-            val sessionStart = hooks["SessionStart"]?.jsonArray ?: return false
-
-            sessionStart.any { entry ->
-                val hooksList = entry.jsonObject["hooks"]?.jsonArray ?: return@any false
-                hooksList.any { hook ->
-                    val command = hook.jsonObject["command"]?.jsonPrimitive?.content ?: ""
-                    command.contains(HOOK_SCRIPT_NAME)
-                }
-            }
+            val json = Json.parseToJsonElement(settingsFile.readText()).jsonObject
+            val entries = json["hooks"]?.jsonObject?.get(event)?.jsonArray ?: return false
+            entries.any { it.isOurEntry() }
         } catch (e: Exception) {
             logger.debug("Error checking settings.json: ${e.message}")
             false
@@ -220,7 +231,9 @@ class ClaudeHookManager {
     }
 
     /**
-     * Add our hook to settings.json
+     * Add our entry to every event in [HOOK_EVENTS], leaving all other entries (other
+     * tools hook the same events) untouched. Idempotent: events that already carry our
+     * entry are not modified, so a second install is a no-op write.
      */
     private fun addHookToSettings(settingsFile: File): Boolean {
         try {
@@ -229,56 +242,27 @@ class ClaudeHookManager {
                 ignoreUnknownKeys = true
             }
 
-            // Read existing settings or create new
-            val existingContent = if (settingsFile.exists()) {
-                settingsFile.readText()
-            } else {
-                "{}"
-            }
-
+            val existingContent = if (settingsFile.exists()) settingsFile.readText() else "{}"
             val rootObject = Json.parseToJsonElement(existingContent).jsonObject.toMutableMap()
-
-            // Get or create hooks object
             val hooksObject = (rootObject["hooks"]?.jsonObject?.toMutableMap() ?: mutableMapOf())
 
-            // Get or create SessionStart array
-            val sessionStartArray = (hooksObject["SessionStart"]?.jsonArray?.toMutableList() ?: mutableListOf())
-
-            // Check if our hook already exists
-            val alreadyExists = sessionStartArray.any { entry ->
-                val hooksList = entry.jsonObject["hooks"]?.jsonArray ?: return@any false
-                hooksList.any { hook ->
-                    val command = hook.jsonObject["command"]?.jsonPrimitive?.content ?: ""
-                    command.contains(HOOK_SCRIPT_NAME)
-                }
+            var added = 0
+            for ((event, matcher) in HOOK_EVENTS) {
+                val entries = hooksObject[event]?.jsonArray?.toMutableList() ?: mutableListOf()
+                if (entries.any { it.isOurEntry() }) continue
+                entries.add(hookEntry(matcher))
+                hooksObject[event] = JsonArray(entries)
+                added++
             }
 
-            if (alreadyExists) {
-                logger.info("Hook already exists in settings.json")
+            if (added == 0) {
+                logger.info("Hook already present for all ${HOOK_EVENTS.size} events in settings.json")
                 return true
             }
 
-            // Add our hook entry
-            val newHookEntry = buildJsonObject {
-                put("matcher", "*")
-                putJsonArray("hooks") {
-                    addJsonObject {
-                        put("type", "command")
-                        put("command", "\$HOME/.claude/hooks/$HOOK_SCRIPT_NAME")
-                    }
-                }
-            }
-            sessionStartArray.add(newHookEntry)
-
-            // Rebuild the hooks object
-            hooksObject["SessionStart"] = JsonArray(sessionStartArray)
             rootObject["hooks"] = JsonObject(hooksObject)
-
-            // Write back
-            val newContent = jsonFormat.encodeToString(JsonObject.serializer(), JsonObject(rootObject))
-            settingsFile.writeText(newContent)
-
-            logger.info("Added hook to settings.json")
+            settingsFile.writeText(jsonFormat.encodeToString(JsonObject.serializer(), JsonObject(rootObject)))
+            logger.info("Added hook to settings.json for $added event(s)")
             return true
 
         } catch (e: Exception) {
@@ -288,7 +272,8 @@ class ClaudeHookManager {
     }
 
     /**
-     * Remove our hook from settings.json
+     * Remove our entry from every event; empty arrays and an empty hooks object are
+     * dropped, everything else is left as it was.
      */
     private fun removeHookFromSettings(settingsFile: File): Boolean {
         if (!settingsFile.exists()) return false
@@ -299,46 +284,26 @@ class ClaudeHookManager {
                 ignoreUnknownKeys = true
             }
 
-            val content = settingsFile.readText()
-            val rootObject = Json.parseToJsonElement(content).jsonObject.toMutableMap()
-
+            val rootObject = Json.parseToJsonElement(settingsFile.readText()).jsonObject.toMutableMap()
             val hooksObject = rootObject["hooks"]?.jsonObject?.toMutableMap() ?: return false
-            val sessionStartArray = hooksObject["SessionStart"]?.jsonArray?.toMutableList() ?: return false
 
-            // Filter out our hook
-            val originalSize = sessionStartArray.size
-            val filtered = sessionStartArray.filter { entry ->
-                val hooksList = entry.jsonObject["hooks"]?.jsonArray ?: return@filter true
-                !hooksList.any { hook ->
-                    val command = hook.jsonObject["command"]?.jsonPrimitive?.content ?: ""
-                    command.contains(HOOK_SCRIPT_NAME)
-                }
+            var removed = 0
+            for ((event, _) in HOOK_EVENTS) {
+                val entries = hooksObject[event]?.jsonArray ?: continue
+                val filtered = entries.filterNot { it.isOurEntry() }
+                if (filtered.size == entries.size) continue
+                removed += entries.size - filtered.size
+                if (filtered.isEmpty()) hooksObject.remove(event) else hooksObject[event] = JsonArray(filtered)
             }
 
-            if (filtered.size == originalSize) {
+            if (removed == 0) {
                 logger.info("Hook not found in settings.json")
                 return false
             }
 
-            // Update SessionStart (or remove if empty)
-            if (filtered.isEmpty()) {
-                hooksObject.remove("SessionStart")
-            } else {
-                hooksObject["SessionStart"] = JsonArray(filtered)
-            }
-
-            // Update hooks (or remove if empty)
-            if (hooksObject.isEmpty()) {
-                rootObject.remove("hooks")
-            } else {
-                rootObject["hooks"] = JsonObject(hooksObject)
-            }
-
-            // Write back
-            val newContent = jsonFormat.encodeToString(JsonObject.serializer(), JsonObject(rootObject))
-            settingsFile.writeText(newContent)
-
-            logger.info("Removed hook from settings.json")
+            if (hooksObject.isEmpty()) rootObject.remove("hooks") else rootObject["hooks"] = JsonObject(hooksObject)
+            settingsFile.writeText(jsonFormat.encodeToString(JsonObject.serializer(), JsonObject(rootObject)))
+            logger.info("Removed $removed hook entr${if (removed == 1) "y" else "ies"} from settings.json")
             return true
 
         } catch (e: Exception) {

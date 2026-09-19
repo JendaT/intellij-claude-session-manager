@@ -120,7 +120,7 @@ class SessionHistoryAction : ActionGroup() {
             // Resume the session using context
             val context = TerminalHelper.getTerminalContext(e)
             if (context != null) {
-                val command = TerminalHelper.buildResumeCommand(historyEntry.sessionId)
+                val command = TerminalHelper.buildResumeCommand(project, historyEntry.sessionId)
                 TerminalHelper.executeCommand(context, command)
             }
 

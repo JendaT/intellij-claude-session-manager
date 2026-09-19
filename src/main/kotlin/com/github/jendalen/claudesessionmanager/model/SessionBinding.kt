@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 /**
  * Links a terminal tab to a Claude session.
  *
- * Stored in .idea/claudeSessionManager.xml per project.
+ * Persisted per project in .idea/workspace.xml (component ClaudeSessionBindings).
  */
 @Serializable
 data class SessionBinding(
@@ -53,6 +53,21 @@ data class SessionBinding(
         lastResumedAt = System.currentTimeMillis(),
         resumeCount = resumeCount + 1
     )
+
+    /**
+     * The newest session of this binding that can actually be resumed: the current id
+     * first, then the history newest-first, the first one for which [hasTranscript] is
+     * true. Null when none has a transcript.
+     *
+     * The current id alone is not enough: a fresh session writes its transcript only after
+     * the first user message, and misattributed startup events plant ids that never get
+     * one. Treating such an id as "purged" lost sessions that were sitting in history.
+     */
+    fun resumableSessionId(hasTranscript: (String) -> Boolean): String? {
+        val candidates = listOf(currentSessionId) +
+            sessionHistory.sortedByDescending { it.replacedAt }.map { it.sessionId }
+        return candidates.distinct().firstOrNull(hasTranscript)
+    }
 }
 
 /**

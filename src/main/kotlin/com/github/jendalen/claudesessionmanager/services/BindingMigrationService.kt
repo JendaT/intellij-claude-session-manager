@@ -70,9 +70,7 @@ class BindingMigrationService(private val project: Project) {
             return 0
         }
 
-        val openTabs: List<Content> = toolWindow.contentManager.contents
-            .filterNot { TerminalHelper.isTeamTab(it) }
-            .toList()
+        val openTabs: List<Content> = toolWindow.contentManager.contents.toList()
         if (openTabs.isEmpty()) {
             logger.debug("Binding migration deferred: no terminal tabs open yet (${allBindings.size} bindings)")
             return 0

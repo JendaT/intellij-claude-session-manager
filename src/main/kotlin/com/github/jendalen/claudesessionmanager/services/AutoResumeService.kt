@@ -14,6 +14,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.util.Disposer
+import com.intellij.terminal.frontend.view.TerminalViewSessionState
 import com.intellij.ui.content.Content
 import com.intellij.util.Alarm
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,13 @@ class AutoResumeService : ProjectActivity {
         private const val TAB_RESTORE_WAIT_BUDGET_MS = 15000L
         private const val TAB_RESTORE_POLL_MS = 500L
         private const val MAX_STAGNANT_POLLS = 4
+
+        // Eager shell start for restored tabs (see startShellsForRestoredTabs): dwell per
+        // tab while it is selected, how long to wait for the sessions to start, passes.
+        private const val TAB_SHOW_DWELL_MS = 150L
+        private const val TAB_SHOW_SETTLE_MS = 250L
+        private const val SHELL_START_BUDGET_MS = 10000L
+        private const val SHELL_START_PASSES = 2
     }
 
     private enum class ResumeOutcome { RESUMED, MISSING, FAILED }
@@ -50,6 +58,12 @@ class AutoResumeService : ProjectActivity {
 
         val delayMs = settings.autoResumeDelayMs
         logger.info("Binding re-attachment starts after ${delayMs}ms delay (autoResume=${settings.autoResumeEnabled})")
+        // Backstop for registry files whose SessionEnd never fired (killed IDE).
+        try {
+            SessionRegistryService.getInstance().sweepOnce()
+        } catch (e: Exception) {
+            logger.warn("Session registry sweep failed: ${e.message}")
+        }
         delay(delayMs)
 
         // Re-attach bindings to restored tabs on both paths.
@@ -92,6 +106,7 @@ class AutoResumeService : ProjectActivity {
 
         // Track results
         var resumedCount = 0
+        val resumedContents = mutableListOf<Content>()
         val missingBindings = mutableListOf<SessionBinding>()
         val staleBindings = mutableListOf<SessionBinding>()
         var failedCount = 0
@@ -121,12 +136,19 @@ class AutoResumeService : ProjectActivity {
                     "(current ${binding.currentSessionId} was never persisted - empty resume fork)")
                 handledSessionIds.add(resumableSessionId.lowercase())
             }
-            when (resumeBinding(project, binding, bindingService, resumableSessionId)) {
-                ResumeOutcome.RESUMED -> resumedCount++
+            val (outcome, content) = resumeBinding(project, binding, bindingService, resumableSessionId)
+            when (outcome) {
+                ResumeOutcome.RESUMED -> {
+                    resumedCount++
+                    content?.let { resumedContents.add(it) }
+                }
                 ResumeOutcome.MISSING -> missingBindings.add(binding)
                 ResumeOutcome.FAILED -> failedCount++
             }
         }
+
+        // The resume commands are only queued for tabs whose shell has not started.
+        failedCount += startShellsForRestoredTabs(project, resumedContents)
 
         // Show notifications
         if (resumedCount > 0) {
@@ -193,13 +215,11 @@ class AutoResumeService : ProjectActivity {
     }
 
     /**
-     * Returns the newest session id of this binding whose transcript exists on disk:
-     * the current id first, then the history entries newest-first. Null when none exists.
+     * Returns the newest session id of this binding whose transcript exists on disk
+     * (see [SessionBinding.resumableSessionId]). Null when none exists.
      */
     private fun resolveResumableSessionId(binding: SessionBinding): String? {
-        val candidates = listOf(binding.currentSessionId) +
-            binding.sessionHistory.sortedByDescending { it.replacedAt }.map { it.sessionId }
-        return candidates.distinct().firstOrNull { ClaudePathResolver.sessionFileExists(it) }
+        return binding.resumableSessionId { ClaudePathResolver.sessionFileExists(it) }
     }
 
     /**
@@ -213,13 +233,13 @@ class AutoResumeService : ProjectActivity {
         binding: SessionBinding,
         bindingService: BindingService,
         sessionId: String = binding.currentSessionId
-    ): ResumeOutcome = withContext(Dispatchers.EDT) {
+    ): Pair<ResumeOutcome, Content?> = withContext(Dispatchers.EDT) {
         val targetName = binding.tabIdentifier.effectiveName
         try {
             val content = resolveContentForBinding(project, binding, bindingService)
             if (content == null) {
                 logger.info("Terminal tab '$targetName' not found (or ambiguous) - adding to missing list")
-                return@withContext ResumeOutcome.MISSING
+                return@withContext ResumeOutcome.MISSING to null
             }
 
             val displayName = content.displayName ?: targetName
@@ -242,14 +262,103 @@ class AutoResumeService : ProjectActivity {
                 TerminalHelper.setClaudeIconOnContent(content)
                 TerminalHelper.protectTabTitleIfEnabled(project, content)
                 logger.info("Auto-resumed session $sessionId in tab '$displayName'")
-                ResumeOutcome.RESUMED
+                ResumeOutcome.RESUMED to content
             } else {
                 logger.warn("Failed to resume session $sessionId in tab '$displayName'")
-                ResumeOutcome.FAILED
+                ResumeOutcome.FAILED to content
             }
         } catch (e: Exception) {
             logger.error("Error resuming session $sessionId: ${e.message}", e)
-            ResumeOutcome.FAILED
+            ResumeOutcome.FAILED to null
+        }
+    }
+
+    /**
+     * Makes every resumed tab actually start its shell. The reworked terminal restores
+     * tabs lazily: TransferableTerminalSessionImpl schedules the shell start with
+     * initOnShow(view.component), so a restored tab's process starts only when its
+     * component is first shown, and TerminalView.sendText is buffered until then.
+     * Observed 2026-09-15: 24 resume commands were queued within 20 s, but only the
+     * selected tab of each project launched Claude; the rest launched 3-25 min later, on
+     * the user's click. For unattended operation each not-yet-started tab is selected
+     * once (the start is scheduled on the first showing and is NonCancellable, so the
+     * tab can be deselected right away) and the original selection is restored.
+     *
+     * @return number of tabs whose shell still had not started within the budget
+     */
+    private suspend fun startShellsForRestoredTabs(project: Project, contents: List<Content>): Int {
+        if (contents.isEmpty()) return 0
+        val pending = withContext(Dispatchers.EDT) { contents.filter { !isShellStarted(project, it) } }
+        if (pending.isEmpty()) return 0
+        logger.info("${pending.size} restored tab(s) have not started their shell - showing each once")
+
+        for (pass in 1..SHELL_START_PASSES) {
+            val stillPending = withContext(Dispatchers.EDT) { pending.filter { !isShellStarted(project, it) } }
+            if (stillPending.isEmpty()) break
+            showEachOnce(project, stillPending)
+            val deadline = System.currentTimeMillis() + SHELL_START_BUDGET_MS
+            while (System.currentTimeMillis() < deadline) {
+                val notStarted = withContext(Dispatchers.EDT) { stillPending.filter { !isShellStarted(project, it) } }
+                if (notStarted.isEmpty()) break
+                delay(TAB_SHOW_SETTLE_MS)
+            }
+        }
+
+        val notStarted = withContext(Dispatchers.EDT) { pending.filter { !isShellStarted(project, it) } }
+        for (content in pending - notStarted.toSet()) {
+            logger.info("Started shell for restored tab '${content.displayName}'")
+        }
+        for (content in notStarted) {
+            logger.warn("Shell of restored tab '${content.displayName}' did not start within ${SHELL_START_BUDGET_MS}ms - its resume is still queued")
+        }
+        return notStarted.size
+    }
+
+    private fun isShellStarted(project: Project, content: Content): Boolean {
+        val tabId = TerminalHelper.getTabId(content) ?: return true
+        val view = TerminalHelper.findTerminalViewByTabId(project, tabId) ?: return true
+        return view.sessionState.value !is TerminalViewSessionState.NotStarted
+    }
+
+    /**
+     * Selects each content for one EDT cycle so its component becomes showing, then
+     * restores the previous selection. A hidden tool window is shown for the duration
+     * (initOnShow needs the component on screen) and hidden again afterwards.
+     */
+    private suspend fun showEachOnce(project: Project, contents: List<Content>) {
+        val toolWindow = withContext(Dispatchers.EDT) { TerminalHelper.getTerminalToolWindow(project) } ?: return
+        val contentManager = toolWindow.contentManager
+        val toolWindowManager = com.intellij.openapi.wm.ToolWindowManager.getInstance(project)
+        val (original, wasVisible, previouslyActive) = withContext(Dispatchers.EDT) {
+            val visible = toolWindow.isVisible
+            val active = toolWindowManager.activeToolWindowId
+            if (!visible) toolWindow.show()
+            Triple(contentManager.selectedContent, visible, active)
+        }
+        try {
+            for (content in contents) {
+                withContext(Dispatchers.EDT) {
+                    if (contentManager.getIndexOfContent(content) >= 0) {
+                        contentManager.setSelectedContent(content, false)
+                    }
+                }
+                // The hierarchy listener behind initOnShow runs on the event queue; give it
+                // a dispatched turn before moving on.
+                delay(TAB_SHOW_DWELL_MS)
+            }
+        } finally {
+            withContext(Dispatchers.EDT) {
+                if (original != null && contentManager.getIndexOfContent(original) >= 0) {
+                    contentManager.setSelectedContent(original, false)
+                }
+                if (!wasVisible) {
+                    // Put back whatever was in front: another tool window in the same
+                    // group, or nothing.
+                    val previous = previouslyActive?.takeIf { it != toolWindow.id }
+                        ?.let { toolWindowManager.getToolWindow(it) }
+                    if (previous != null) previous.activate(null, false) else toolWindow.hide()
+                }
+            }
         }
     }
 
@@ -276,7 +385,6 @@ class AutoResumeService : ProjectActivity {
         // genuine ambiguity into a false "unique" match by elimination.
         val titleNames = TerminalHelper.persistentNamesSnapshot(project)
         val candidates = toolWindow.contentManager.contents
-            .filterNot { TerminalHelper.isTeamTab(it) }
             .filter { titleNames[it] == targetName }
 
         val content = candidates.singleOrNull() ?: return null
@@ -434,7 +542,7 @@ class AutoResumeService : ProjectActivity {
                 tabId = tabId,
                 persistentName = binding.tabIdentifier.persistentName
             )
-            if (TerminalHelper.executeCommand(context, TerminalHelper.getClaudeCommand())) {
+            if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project))) {
                 TerminalHelper.setClaudeIconOnContent(content)
                 TerminalHelper.protectTabTitleIfEnabled(project, content)
                 started++
@@ -478,7 +586,6 @@ class AutoResumeService : ProjectActivity {
                             val bindingService = BindingService.getInstance(project)
                             val content = TerminalHelper.getTerminalToolWindow(project)
                                 ?.contentManager?.contents
-                                ?.filterNot { TerminalHelper.isTeamTab(it) }
                                 ?.filter { it.displayName == tabName }
                                 ?.filterNot { c ->
                                     TerminalHelper.getTabId(c)?.let { id ->
