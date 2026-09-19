@@ -31,6 +31,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         var notifyOnSessionChange: Boolean = true
         var notifyOnAutoDetection: Boolean = true
         var syncTabNames: Boolean = true
+        var pushTabNameToSession: Boolean = true
         var customClaudeHomePath: String? = null
         var fileWatcherDebounceMs: Long = 500
         var maxHistoryPerBinding: Int = 20
@@ -57,6 +58,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         notifyOnSessionChange = state.notifyOnSessionChange,
         notifyOnAutoDetection = state.notifyOnAutoDetection,
         syncTabNames = state.syncTabNames,
+        pushTabNameToSession = state.pushTabNameToSession,
         customClaudeHomePath = state.customClaudeHomePath,
         fileWatcherDebounceMs = state.fileWatcherDebounceMs,
         maxHistoryPerBinding = state.maxHistoryPerBinding,
@@ -76,6 +78,7 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
         state.notifyOnSessionChange = validated.notifyOnSessionChange
         state.notifyOnAutoDetection = validated.notifyOnAutoDetection
         state.syncTabNames = validated.syncTabNames
+        state.pushTabNameToSession = validated.pushTabNameToSession
         state.customClaudeHomePath = validated.customClaudeHomePath
         state.fileWatcherDebounceMs = validated.fileWatcherDebounceMs
         state.maxHistoryPerBinding = validated.maxHistoryPerBinding
@@ -114,6 +117,10 @@ class SettingsService : PersistentStateComponent<SettingsService.State> {
     var syncTabNames: Boolean
         get() = state.syncTabNames
         set(value) { state.syncTabNames = value }
+
+    var pushTabNameToSession: Boolean
+        get() = state.pushTabNameToSession
+        set(value) { state.pushTabNameToSession = value }
 
     var customClaudeHomePath: String?
         get() = state.customClaudeHomePath

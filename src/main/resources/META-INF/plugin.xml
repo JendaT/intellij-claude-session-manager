@@ -25,6 +25,21 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.8.0</h3>
+        <ul>
+            <li>New: session title sync in both directions. /rename (or --name) in a session
+                renames its bound tab, persistently; renaming a tab in the IDE renames the
+                session - typed as /rename while the session is idle, otherwise delivered with
+                --name at its next resume or through the new tab-menu action "Push Tab Name to
+                Claude Session". The "Sync Claude /rename to terminal tab name" setting now
+                works; "Push IDE tab renames to the Claude session" is new.</li>
+            <li>New: registry files carry the session's Claude-side title as "title".</li>
+            <li>Changed: the launch profile rejects --name and -n; session naming belongs to
+                the plugin.</li>
+            <li>Limitation: a /rename typed into a session whose prompt box holds an unsent
+                draft submits the draft with it (only right after an IDE rename of an idle
+                session).</li>
+        </ul>
         <h3>0.7.0</h3>
         <ul>
             <li>New: per-project launch profile (Settings > Tools > Claude Session Manager >
@@ -289,6 +304,11 @@
                     class="com.github.jendalen.claudesessionmanager.actions.ResumeSessionAction"
                     text="Resume Session"
                     description="Resume the bound Claude session"/>
+
+            <action id="ClaudeSessionManager.PushTabName"
+                    class="com.github.jendalen.claudesessionmanager.actions.PushTabNameAction"
+                    text="Push Tab Name to Claude Session"
+                    description="Rename the bound Claude session to this tab's name (/rename); only while the session is idle"/>
 
             <separator/>
 

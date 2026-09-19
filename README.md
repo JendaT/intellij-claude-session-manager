@@ -11,6 +11,7 @@ Keep multiple Claude sessions organized - each terminal tab remembers its sessio
 - **Session history per tab** - Switch between previous sessions used in a tab
 - **Detects session changes** - Automatically tracks `/clear`, `/compact`, `/resume` commands
 - **Tab rename support** - Bindings follow when you rename terminal tabs
+- **Session title sync** - `/rename` in Claude renames the tab (persistently); renaming the tab renames the session
 - **Per-project launch profile** - Extra Claude launch arguments applied to every launch in a project
 - **Session registry** - One JSON file per live session (`idle` / `busy` / `waiting`) for external tools
 
@@ -64,7 +65,8 @@ The settings page reports an outdated script version and offers the upgrade.
   "updated_at": "2026-09-17T09:12:03+02:00",
   "pid": 4452,
   "project": "Shop-worktree2",
-  "tab": "Local (2)"
+  "tab": "payments",
+  "title": "payments"
 }
 ```
 
@@ -72,7 +74,9 @@ The settings page reports an outdated script version and offers the upgrade.
   (a permission prompt is open; cleared by the next PreToolUse or Stop).
 - `pid`: the Claude process; `kill -0 <pid>` tells a reader whether the entry is dead.
 - `project` and `tab`: written by the plugin when it binds the session and on tab rename
-  (`tab` is the persisted tab name, not Claude's live title).
+  (`tab` is the persisted tab name, not Claude's live status title).
+- `title`: the session's own title (`/rename`, `--name`), written by the plugin when it
+  observes it; equals `tab` once the two are in sync. Absent for sessions never named.
 - Files are replaced atomically, removed on `SessionEnd` and when the project closes, and
   swept after 24 h. Readers should treat the directory as read-only.
 
@@ -89,6 +93,7 @@ The settings page reports an outdated script version and offers the upgrade.
 Right-click any terminal tab to access:
 - **Bind to Session...** - Associate a Claude session with this tab
 - **Resume Session** - Resume the bound session
+- **Push Tab Name to Claude Session** - `/rename` the session to this tab's name (only while it is idle)
 - **Session History** - Switch to a previous session
 - **Copy Session ID** - Copy the session UUID
 - **Unbind Session** - Remove the binding
@@ -108,7 +113,8 @@ Use the terminal dropdown (▼ next to +) → **Claude Session** to create a new
 | **Resume delay** | Wait time for terminal initialization (500-30000ms) |
 | **Notify on session change** | Show notification when `/clear` etc. changes session |
 | **Notify on auto-detection** | Show notification when Claude is auto-detected |
-| **Sync tab names** | Update tab name when Claude `/rename` is used |
+| **Sync Claude /rename to terminal tab name** | The session's title becomes the tab's persistent name |
+| **Push IDE tab renames to the Claude session** | A renamed tab renames its session: `/rename` while idle, else `--name` at the next resume or the tab-menu action "Push Tab Name to Claude Session" |
 | **Claude command** | CLI command (e.g., `claude` or a custom alias) |
 | **Home directory** | Custom Claude home path (default: `~/.claude`) |
 | **Protect bound tab names** | Bound tabs ignore Claude Code's terminal-title renaming |

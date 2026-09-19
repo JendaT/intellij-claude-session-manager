@@ -16,7 +16,9 @@ data class SessionBinding(
     val autoResume: Boolean = true,
     val createdAt: Long,                 // When binding was created (epoch millis)
     val lastResumedAt: Long? = null,     // Last successful resume (epoch millis)
-    val resumeCount: Int = 0             // Number of successful resumes
+    val resumeCount: Int = 0,            // Number of successful resumes
+    val sessionTitle: String? = null,    // Last /rename title observed for currentSessionId
+    val pendingTitlePush: String? = null // IDE tab name not yet delivered to the session
 ) {
     /**
      * Maximum number of history entries to keep per binding.
@@ -40,9 +42,13 @@ data class SessionBinding(
         // Prepend new entry and trim to max size
         val updatedHistory = (listOf(historyEntry) + sessionHistory).take(MAX_HISTORY_SIZE)
 
+        // Titles are per session: the old session's title says nothing about the new
+        // one, and a pending push carried over would be typed into the wrong session.
         return copy(
             currentSessionId = newSessionId,
-            sessionHistory = updatedHistory
+            sessionHistory = updatedHistory,
+            sessionTitle = null,
+            pendingTitlePush = null
         )
     }
 

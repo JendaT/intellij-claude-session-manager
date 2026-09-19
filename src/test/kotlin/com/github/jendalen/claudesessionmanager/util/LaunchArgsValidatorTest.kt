@@ -80,11 +80,21 @@ class LaunchArgsValidatorTest {
         assertTrue(LaunchArgsValidator.rejectionReason("--mcp-config x.json")!!.contains("--mcp-config"))
     }
 
-    // `-cd` is `--continue --debug`; a session-selecting letter hidden in a combined short
-    // flag is still session selection. Other short flags and every long flag stay valid.
+    // The plugin appends --name itself for a pending tab-name push; a launch profile
+    // carrying one would either duplicate or override it.
     @Test
-    fun `rejects combined short flags that carry r or c`() {
-        for (bad in listOf("-cd", "-dc", "-vr", "-rv", "-pc", "-d -rc")) {
+    fun `rejects session naming flags in every spelling`() {
+        for (bad in listOf("--name x", "--name=x", "-n x", "--channels plugin:a@b --name x")) {
+            assertNull(LaunchArgsValidator.normalize(bad), "should reject: $bad")
+        }
+        assertTrue(LaunchArgsValidator.rejectionReason("--name x")!!.contains("naming"))
+    }
+
+    // `-cd` is `--continue --debug`; a session-selecting or naming letter hidden in a
+    // combined short flag is still that flag. Other short flags and every long flag stay valid.
+    @Test
+    fun `rejects combined short flags that carry r, c or n`() {
+        for (bad in listOf("-cd", "-dc", "-vr", "-rv", "-pc", "-d -rc", "-dn", "-nd")) {
             assertNull(LaunchArgsValidator.normalize(bad), "should reject: $bad")
         }
         for (ok in listOf("-d", "-p", "-v", "-dv", "--channels plugin:test-channel@spike-market", "--debug")) {

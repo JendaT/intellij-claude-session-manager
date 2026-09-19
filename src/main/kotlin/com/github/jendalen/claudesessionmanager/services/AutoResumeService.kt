@@ -312,7 +312,8 @@ class AutoResumeService : ProjectActivity {
                 persistentName = binding.tabIdentifier.persistentName
             )
 
-            val success = TerminalHelper.executeCommandInTerminal(project, context, sessionId)
+            val pendingName = pendingTitlePushFor(binding, sessionId)
+            val success = TerminalHelper.executeCommandInTerminal(project, context, sessionId, pendingName)
             if (success) {
                 bindingService.markBindingResumed(binding.id)
                 TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
@@ -451,6 +452,26 @@ class AutoResumeService : ProjectActivity {
         return content
     }
 
+    /**
+     * The tab name still to be delivered to [sessionId] as `--name`, or null. Only the
+     * binding's own current session gets it: a history fallback id (D4) is a different
+     * session and must not inherit a name meant for another one. Not cleared here -
+     * the title sync clears it when the transcript shows the name, so a resume that
+     * never started keeps the push for the next attempt. An unquotable name is dropped
+     * with a log line rather than failing the resume.
+     */
+    private fun pendingTitlePushFor(binding: SessionBinding, sessionId: String): String? {
+        val name = binding.pendingTitlePush ?: return null
+        if (!sessionId.equals(binding.currentSessionId, ignoreCase = true)) return null
+        val reason = com.github.jendalen.claudesessionmanager.util.SessionNameValidator.rejectionReason(name)
+        if (reason != null) {
+            logger.info("Dropping pending title push '$name' for binding ${binding.id}: $reason")
+            return null
+        }
+        logger.info("Resuming $sessionId with --name '$name' (pending tab-name push)")
+        return name
+    }
+
     private fun startSessionWatcher(project: Project) {
         try {
             SessionWatcherService.getInstance(project).startWatching()
@@ -473,6 +494,14 @@ class AutoResumeService : ProjectActivity {
             logger.info("Started Claude hook event watching")
         } catch (e: Exception) {
             logger.warn("Failed to start Claude hook event watching: ${e.message}", e)
+        }
+
+        // Title sync polls files only; it starts here so it is off until the terminal
+        // and the bindings are ready.
+        try {
+            SessionTitleSyncService.getInstance(project).start()
+        } catch (e: Exception) {
+            logger.warn("Failed to start session title sync: ${e.message}", e)
         }
     }
 
@@ -669,7 +698,8 @@ class AutoResumeService : ProjectActivity {
                                     tabId = tabId,
                                     persistentName = persistentName
                                 )
-                                val success = TerminalHelper.executeCommandInTerminal(project, context, resumableSessionId)
+                                val pendingName = pendingTitlePushFor(binding, resumableSessionId)
+                                val success = TerminalHelper.executeCommandInTerminal(project, context, resumableSessionId, pendingName)
                                 if (success) {
                                     bindingService.attachTabUuid(binding.id, tabId, persistentName)
                                     bindingService.markBindingResumed(binding.id)

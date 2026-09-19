@@ -65,18 +65,29 @@ class SessionRegistryService {
      * has not written it yet (the output channel binds a resumed session from the typed
      * command line, before Claude even starts), otherwise merges into it. No write when
      * nothing changes - the output channel re-confirms every binding every few seconds.
+     *
+     * [title] is Claude's own session title (`/rename`); null leaves an existing value
+     * alone because most callers (bind, tab rename) do not know it, and a title is
+     * never cleared - Claude keeps the last one too.
      */
-    fun upsert(sessionId: String, project: String, tab: String?, cwd: String? = null, dir: File = defaultDirectory()) {
+    fun upsert(
+        sessionId: String,
+        project: String,
+        tab: String?,
+        cwd: String? = null,
+        title: String? = null,
+        dir: File = defaultDirectory()
+    ) {
         if (!SessionIdValidator.isValid(sessionId)) return
         // Read-modify-write from pooled threads (a bind confirmation and a rename can
         // land together for one session); serialize within the process. Cross-process
         // overlap with the hook script is accepted (F6).
         synchronized(this) {
-            upsertLocked(sessionId, project, tab, cwd, dir)
+            upsertLocked(sessionId, project, tab, cwd, title, dir)
         }
     }
 
-    private fun upsertLocked(sessionId: String, project: String, tab: String?, cwd: String?, dir: File) {
+    private fun upsertLocked(sessionId: String, project: String, tab: String?, cwd: String?, title: String?, dir: File) {
         try {
             val file = File(dir, "${sessionId.lowercase()}.json")
             val existing = readObject(file)
@@ -84,6 +95,7 @@ class SessionRegistryService {
             fields["session_id"] = JsonPrimitive(sessionId.lowercase())
             fields["project"] = JsonPrimitive(project)
             if (tab != null) fields["tab"] = JsonPrimitive(tab)
+            if (!title.isNullOrBlank()) fields["title"] = JsonPrimitive(title)
             if (cwd != null && "cwd" !in fields) fields["cwd"] = JsonPrimitive(cwd)
             if (fields == existing) return
             fields["updated_at"] = JsonPrimitive(now())
@@ -109,7 +121,7 @@ class SessionRegistryService {
 
     /**
      * What the registry knows about one session. [cwd], [state] and [pid] come from the
-     * hook script, [project] and [tab] from a plugin; any of them may be absent.
+     * hook script, [project], [tab] and [title] from a plugin; any of them may be absent.
      */
     data class Entry(
         val sessionId: String,
@@ -117,7 +129,8 @@ class SessionRegistryService {
         val state: String?,
         val pid: Long?,
         val project: String?,
-        val tab: String?
+        val tab: String?,
+        val title: String? = null
     ) {
         /** True when the hook recorded a Claude process for this session and it is still running. */
         fun isLive(): Boolean = pid != null && isProcessAlive(pid)
@@ -146,7 +159,8 @@ class SessionRegistryService {
             state = str("state"),
             pid = pid,
             project = str("project"),
-            tab = str("tab")
+            tab = str("tab"),
+            title = str("title")
         )
     }
 

@@ -29,6 +29,23 @@ class LaunchCommandTest {
     }
 
     @Test
+    fun `resume appends a single-quoted name after the session id`() {
+        assertEquals(
+            "claude --channels plugin:a@b --resume $id --name 'payments bug (2)'",
+            LaunchCommand.resume("claude", "--channels plugin:a@b", id, "payments bug (2)")
+        )
+        assertEquals("claude --resume $id", LaunchCommand.resume("claude", "", id, null))
+    }
+
+    @Test
+    fun `rejects names that cannot be single-quoted`() {
+        assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", id, "it's") }
+        assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", id, "a\\b") }
+        assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", id, "two\nlines") }
+        assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", id, " ") }
+    }
+
+    @Test
     fun `rejects invalid session ids and invalid args`() {
         assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", "not-a-uuid") }
         assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", "$id; rm -rf ~") }

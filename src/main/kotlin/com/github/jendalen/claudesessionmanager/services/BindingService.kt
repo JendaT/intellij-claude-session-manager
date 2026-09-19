@@ -59,6 +59,8 @@ class BindingService(private val project: Project) :
         var createdAt: Long = 0
         var lastResumedAt: Long? = null
         var resumeCount: Int = 0
+        var sessionTitle: String? = null      // Last /rename title observed for currentSessionId
+        var pendingTitlePush: String? = null  // IDE tab name not yet delivered to the session
 
         @XCollection(style = XCollection.Style.v2)
         var history: MutableList<HistoryEntry> = mutableListOf()
@@ -291,6 +293,36 @@ class BindingService(private val project: Project) :
     }
 
     /**
+     * Records the title Claude reports for the binding's current session (the last
+     * `custom-title` record). Metadata only, like [updatePersistentName]: it never changes
+     * which session the tab holds, so the coordinator's single write path is intact.
+     */
+    fun recordSessionTitle(bindingId: String, title: String?): SessionBinding? {
+        val binding = bindingsCache[bindingId] ?: return null
+        if (binding.sessionTitle == title) return binding
+        val updated = binding.copy(sessionTitle = title)
+        bindingsCache[bindingId] = updated
+        syncToState()
+        logger.info("Recorded session title '${title ?: ""}' on binding $bindingId")
+        return updated
+    }
+
+    /**
+     * Sets or clears the IDE tab name still to be delivered to the session with `/rename`
+     * or `--name` (null clears). Persisted so a rename made while the session was busy
+     * survives an IDE restart and rides along with the next resume.
+     */
+    fun setPendingTitlePush(bindingId: String, name: String?): SessionBinding? {
+        val binding = bindingsCache[bindingId] ?: return null
+        if (binding.pendingTitlePush == name) return binding
+        val updated = binding.copy(pendingTitlePush = name)
+        bindingsCache[bindingId] = updated
+        syncToState()
+        logger.info("Pending title push on binding $bindingId: ${name?.let { "'$it'" } ?: "cleared"}")
+        return updated
+    }
+
+    /**
      * Returns all bindings with auto-resume enabled.
      */
     fun getAutoResumeBindings(): List<SessionBinding> {
@@ -324,6 +356,8 @@ class BindingService(private val project: Project) :
             createdAt = binding.createdAt
             lastResumedAt = binding.lastResumedAt
             resumeCount = binding.resumeCount
+            sessionTitle = binding.sessionTitle
+            pendingTitlePush = binding.pendingTitlePush
             history = binding.sessionHistory.map { h ->
                 HistoryEntry().apply {
                     sessionId = h.sessionId
@@ -354,7 +388,9 @@ class BindingService(private val project: Project) :
             autoResume = entry.autoResume,
             createdAt = entry.createdAt,
             lastResumedAt = entry.lastResumedAt,
-            resumeCount = entry.resumeCount
+            resumeCount = entry.resumeCount,
+            sessionTitle = entry.sessionTitle,
+            pendingTitlePush = entry.pendingTitlePush
         )
     }
 

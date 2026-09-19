@@ -38,6 +38,7 @@ class PluginSettingsConfigurable : Configurable {
     private var notifyOnSessionChange = settingsService.getSettings().notifyOnSessionChange
     private var notifyOnAutoDetection = settingsService.getSettings().notifyOnAutoDetection
     private var syncTabNames = settingsService.syncTabNames
+    private var pushTabNameToSession = settingsService.pushTabNameToSession
     private var customClaudeHomePath = settingsService.customClaudeHomePath ?: ""
     private var forceOptionAsMetaKeyOff = settingsService.forceOptionAsMetaKeyOff
     private var protectTabNames = settingsService.protectTabNames
@@ -122,6 +123,20 @@ class PluginSettingsConfigurable : Configurable {
                 row {
                     checkBox("Sync Claude /rename to terminal tab name")
                         .bindSelected(::syncTabNames)
+                        .comment(
+                            "The session's title (/rename, --name) becomes the tab's name and " +
+                                "survives IDE restarts."
+                        )
+                }
+                row {
+                    checkBox("Push IDE tab renames to the Claude session (/rename)")
+                        .bindSelected(::pushTabNameToSession)
+                        .comment(
+                            "Sent only while the session is idle; a busy or waiting session gets " +
+                                "the name at its next resume (--name) or via the tab menu's " +
+                                "\"Push Tab Name to Claude Session\". An unsent draft in the " +
+                                "prompt box would be submitted together with the command."
+                        )
                 }
                 row {
                     checkBox("Protect bound tab names in this IDE (ignore Claude Code's renaming)")
@@ -313,6 +328,7 @@ class PluginSettingsConfigurable : Configurable {
                 notifyOnSessionChange != settings.notifyOnSessionChange ||
                 notifyOnAutoDetection != settings.notifyOnAutoDetection ||
                 syncTabNames != settings.syncTabNames ||
+                pushTabNameToSession != settings.pushTabNameToSession ||
                 customClaudeHomePath != (settings.customClaudeHomePath ?: "") ||
                 forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff ||
                 protectTabNames != settings.protectTabNames ||
@@ -326,6 +342,7 @@ class PluginSettingsConfigurable : Configurable {
 
         val delayMs = autoResumeDelayMs.toLongOrNull() ?: PluginSettings.DEFAULT.autoResumeDelayMs
         val protectTabNamesChanged = protectTabNames != settingsService.protectTabNames
+        val syncTabNamesEnabled = syncTabNames && !settingsService.syncTabNames
 
         settingsService.updateSettings(
             settingsService.getSettings().copy(
@@ -335,6 +352,7 @@ class PluginSettingsConfigurable : Configurable {
                 notifyOnSessionChange = notifyOnSessionChange,
                 notifyOnAutoDetection = notifyOnAutoDetection,
                 syncTabNames = syncTabNames,
+                pushTabNameToSession = pushTabNameToSession,
                 customClaudeHomePath = customClaudeHomePath.ifBlank { null },
                 forceOptionAsMetaKeyOff = forceOptionAsMetaKeyOff,
                 protectTabNames = protectTabNames
@@ -343,6 +361,14 @@ class PluginSettingsConfigurable : Configurable {
 
         // Notify the guard service so it can act immediately if just enabled
         OptionAsMetaKeyGuardService.getInstance().onGuardSettingChanged(forceOptionAsMetaKeyOff)
+
+        // Titles observed while inbound sync was off are recorded but were never applied;
+        // the poll only reacts to a title changing, so apply them now.
+        if (syncTabNamesEnabled) {
+            for (project in com.intellij.openapi.project.ProjectManager.getInstance().openProjects) {
+                com.github.jendalen.claudesessionmanager.services.SessionTitleSyncService.getInstance(project).reapplyTitles()
+            }
+        }
 
         // Apply/undo title protection on already-bound tabs immediately - otherwise the
         // toggle only takes effect on the next session event, which reads as broken.
@@ -379,6 +405,7 @@ class PluginSettingsConfigurable : Configurable {
         notifyOnSessionChange = settings.notifyOnSessionChange
         notifyOnAutoDetection = settings.notifyOnAutoDetection
         syncTabNames = settings.syncTabNames
+        pushTabNameToSession = settings.pushTabNameToSession
         customClaudeHomePath = settings.customClaudeHomePath ?: ""
         forceOptionAsMetaKeyOff = settings.forceOptionAsMetaKeyOff
         protectTabNames = settings.protectTabNames

@@ -216,6 +216,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                         val persistentName = TerminalHelper.persistentNameOf(terminalTitle) ?: return
                         if (persistentName == lastSeenPersistentName) return
                         lastSeenPersistentName = persistentName
+                        val userDefined = !terminalTitle.userDefinedTitle.isNullOrBlank()
                         ApplicationManager.getApplication().invokeLater {
                             val bindingService = BindingService.getInstance(project)
                             val binding = bindingService.findBindingByTabUuid(tabId)
@@ -227,6 +228,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                                 ApplicationManager.getApplication().executeOnPooledThread {
                                     SessionRegistryService.getInstance().upsert(sessionId, projectName, persistentName)
                                 }
+                                // And so does the Claude session, when it can be typed into.
+                                SessionTitleSyncService.getInstance(project).onTabRenamed(tabId, persistentName, userDefined)
                             }
                         }
                     }

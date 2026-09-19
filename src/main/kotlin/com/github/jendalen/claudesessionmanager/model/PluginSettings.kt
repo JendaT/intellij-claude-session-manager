@@ -36,9 +36,16 @@ data class PluginSettings(
     val notifyOnAutoDetection: Boolean = true,
 
     /**
-     * Whether to sync Claude's /rename to terminal tab names.
+     * Inbound title sync: a session's /rename (or --name) title becomes the bound tab's
+     * persistent name.
      */
     val syncTabNames: Boolean = true,
+
+    /**
+     * Outbound title sync: a tab renamed in the IDE is renamed in its Claude session with
+     * /rename when the session is idle, else at its next resume with --name.
+     */
+    val pushTabNameToSession: Boolean = true,
 
     /**
      * Custom Claude home directory path. If null, auto-detection is used.

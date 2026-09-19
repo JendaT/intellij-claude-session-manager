@@ -19,7 +19,7 @@ class SessionRegistryServiceTest {
 
     @Test
     fun `upsert creates the file with project and tab when the hook has not yet`(@TempDir dir: File) {
-        SessionRegistryService().upsert(id, "Shop", "Local (2)", "/tmp/Shop", dir)
+        SessionRegistryService().upsert(id, "Shop", "Local (2)", "/tmp/Shop", dir = dir)
         val obj = read(dir)
         assertEquals(id, obj["session_id"]!!.jsonPrimitive.content)
         assertEquals("Shop", obj["project"]!!.jsonPrimitive.content)
@@ -33,7 +33,7 @@ class SessionRegistryServiceTest {
     @Test
     fun `upsert merges into the hook's file and keeps its fields`(@TempDir dir: File) {
         File(dir, "$id.json").writeText("""{"session_id":"$id","cwd":"/real/cwd","state":"busy","pid":123,"updated_at":"x"}""")
-        SessionRegistryService().upsert(id, "Shop", "Local", "/plugin/cwd", dir)
+        SessionRegistryService().upsert(id, "Shop", "Local", "/plugin/cwd", dir = dir)
         val obj = read(dir)
         assertEquals("busy", obj["state"]!!.jsonPrimitive.content)
         assertEquals(123, obj["pid"]!!.jsonPrimitive.content.toInt())
@@ -42,14 +42,29 @@ class SessionRegistryServiceTest {
         assertEquals("Local", obj["tab"]!!.jsonPrimitive.content)
     }
 
+    // Bind and rename callers do not know the title; their upserts must not erase what
+    // the title sync wrote, and a blank title is never written (Claude treats it as none).
+    @Test
+    fun `title is written once and survives upserts that do not carry it`(@TempDir dir: File) {
+        val service = SessionRegistryService()
+        service.upsert(id, "P", "Local", null, "payments", dir = dir)
+        assertEquals("payments", read(dir)["title"]!!.jsonPrimitive.content)
+        service.upsert(id, "P", "payments", null, dir = dir)
+        assertEquals("payments", read(dir)["title"]!!.jsonPrimitive.content)
+        assertEquals("payments", read(dir)["tab"]!!.jsonPrimitive.content)
+        service.upsert(id, "P", "payments", null, "  ", dir = dir)
+        assertEquals("payments", read(dir)["title"]!!.jsonPrimitive.content)
+        assertEquals("payments", service.read(id, dir)!!.title)
+    }
+
     @Test
     fun `upsert does not rewrite an unchanged file`(@TempDir dir: File) {
         val service = SessionRegistryService()
-        service.upsert(id, "P", "T", null, dir)
+        service.upsert(id, "P", "T", dir = dir)
         val file = File(dir, "$id.json")
         val before = file.readText()
         file.setLastModified(1_000_000_000_000L)
-        service.upsert(id, "P", "T", null, dir)
+        service.upsert(id, "P", "T", dir = dir)
         assertEquals(before, file.readText())
         assertEquals(1_000_000_000_000L, file.lastModified())
     }
@@ -57,13 +72,13 @@ class SessionRegistryServiceTest {
     @Test
     fun `corrupt file is replaced`(@TempDir dir: File) {
         File(dir, "$id.json").writeText("not json")
-        SessionRegistryService().upsert(id, "P", "T", null, dir)
+        SessionRegistryService().upsert(id, "P", "T", dir = dir)
         assertEquals("P", read(dir)["project"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `invalid ids never touch the disk`(@TempDir dir: File) {
-        SessionRegistryService().upsert("../evil", "P", "T", null, dir)
+        SessionRegistryService().upsert("../evil", "P", "T", dir = dir)
         SessionRegistryService().remove("../evil", dir)
         assertTrue(dir.listFiles()!!.isEmpty())
     }
@@ -72,8 +87,8 @@ class SessionRegistryServiceTest {
     fun `remove and removeAll`(@TempDir dir: File) {
         val service = SessionRegistryService()
         val other = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        service.upsert(id, "P", "T", null, dir)
-        service.upsert(other, "P", "T", null, dir)
+        service.upsert(id, "P", "T", dir = dir)
+        service.upsert(other, "P", "T", dir = dir)
         service.removeAll(listOf(id, other, "not-an-id"), dir)
         assertTrue(dir.listFiles()!!.isEmpty())
     }
@@ -82,8 +97,8 @@ class SessionRegistryServiceTest {
     fun `sweep deletes only files older than the cutoff`(@TempDir dir: File) {
         val service = SessionRegistryService()
         val old = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        service.upsert(id, "P", "T", null, dir)
-        service.upsert(old, "P", "T", null, dir)
+        service.upsert(id, "P", "T", dir = dir)
+        service.upsert(old, "P", "T", dir = dir)
         File(dir, "$old.json").setLastModified(System.currentTimeMillis() - 2 * SessionRegistryService.SWEEP_AGE_MS)
         assertEquals(1, service.sweep(dir = dir))
         assertTrue(File(dir, "$id.json").exists())

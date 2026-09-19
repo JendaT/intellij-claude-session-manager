@@ -32,6 +32,15 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   resume, output-channel cwd guard, suppressed-path publish). Awaiting `verifyPlugin`
   and release.
 
+- [~] **Session title sync** (2026-09-19): spec
+  `docs/specs/2026-09-19-session-title-sync-amendment.md`, plan
+  `docs/plans/2026-09-19-session-title-sync-plan.md`. Code complete as v0.8.0 on
+  `feature/session-title-sync` (transcript-tail title reader, tab rename through the
+  persistent name, idle-only `/rename` push with `--name` delivery at resume, registry
+  `title`, "Push Tab Name to Claude Session" action, 74 unit tests). Awaiting the live
+  checklist at the end of the plan (both IDEs) - in particular whether the reworked
+  terminal's `sendText` delivers a bare CR to Claude's prompt box.
+
 ## Backlog
 
 - [ ] v0.6.6 GitHub release - cut once the reuse-existing decoration fix is confirmed

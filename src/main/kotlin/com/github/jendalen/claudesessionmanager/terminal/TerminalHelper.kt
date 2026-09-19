@@ -241,6 +241,67 @@ object TerminalHelper {
     }
 
     /**
+     * Renames the tab the way the user's rename dialog does: sets
+     * `TerminalTitle.userDefinedTitle`, which is the terminal-persisted name (PRD D1), so
+     * the name survives a restart and the title listener in TerminalOutputMonitorService
+     * follows with the binding's persistentName and the registry `tab` - the same path a
+     * manual rename takes. Used to apply Claude's `/rename` title to the tab. EDT only.
+     */
+    @com.intellij.util.concurrency.annotations.RequiresEdt
+    fun setUserDefinedTitle(project: Project, content: Content, name: String): Boolean {
+        return try {
+            val title = findTerminalTitle(project, content)
+            if (title == null) {
+                logger.info("Cannot rename tab '${content.displayName}' to '$name': no TerminalTitle resolvable")
+                return false
+            }
+            title.change { userDefinedTitle = name }
+            logger.info("Renamed tab '${content.displayName}' to '$name'")
+            true
+        } catch (ex: Exception) {
+            logger.warn("Failed to rename tab '${content.displayName}' to '$name': ${ex.message}", ex)
+            false
+        }
+    }
+
+    /**
+     * Types [text] into the tab's terminal exactly as given. Callers that want Claude
+     * Code to submit what they typed must end [text] with `\r`: a LF (`\n`) only inserts
+     * a newline into the prompt box (verified through a pty on 2.1.278), which is why
+     * this deliberately does not use the send builder's shouldExecute(). Reworked
+     * terminal first (by stable tab id), classic widget by name as the fallback.
+     */
+    fun sendTextToTab(project: Project, content: Content, text: String): Boolean {
+        val tabId = getTabId(content)
+        if (tabId != null) {
+            try {
+                val view = findTerminalViewByTabId(project, tabId)
+                if (view != null) {
+                    view.createSendTextBuilder().send(text)
+                    logger.info("Sent text to tab '${content.displayName}': ${text.trimEnd()}")
+                    return true
+                }
+            } catch (ex: Exception) {
+                logger.warn("TerminalView send failed for '${content.displayName}': ${ex.message}", ex)
+            }
+        }
+        try {
+            val widget = findWidgetByName(project, content.displayName ?: "")
+            if (widget != null) {
+                // Raw pty write: no line-ending translation and no bracketed paste, so the
+                // trailing CR reaches Claude as the Enter key.
+                widget.ttyConnector?.write(text)
+                logger.info("Sent text to classic tab '${content.displayName}': ${text.trimEnd()}")
+                return true
+            }
+        } catch (ex: Exception) {
+            logger.warn("ShellTerminalWidget send failed for '${content.displayName}': ${ex.message}", ex)
+        }
+        logger.warn("Cannot send text to tab '${content.displayName}' - no terminal found for it")
+        return false
+    }
+
+    /**
      * Applies title protection when the setting is enabled.
      */
     fun protectTabTitleIfEnabled(project: Project, content: Content) {
@@ -481,15 +542,17 @@ object TerminalHelper {
     }
 
     /**
-     * Builds `claude [extraArgs] --resume <id>` for [project]. Every path that types a
-     * resume into a terminal goes through here so the launch profile is never skipped -
-     * a flag like a development channel is per project and must apply to auto-resume,
-     * context-menu resume, history restore and new-tab creation alike.
+     * Builds `claude [extraArgs] --resume <id> [--name '<name>']` for [project]. Every path
+     * that types a resume into a terminal goes through here so the launch profile is
+     * never skipped - a flag like a development channel is per project and must apply to
+     * auto-resume, context-menu resume, history restore and new-tab creation alike.
+     * [name] is a pending tab-name push (auto-resume only).
      *
-     * @throws IllegalArgumentException if sessionId is not a valid UUID
+     * @throws IllegalArgumentException if sessionId is not a valid UUID or the name
+     *         cannot be quoted
      */
-    fun buildResumeCommand(project: Project, sessionId: String): String {
-        return LaunchCommand.resume(getClaudeCommand(), getExtraLaunchArgs(project), sessionId)
+    fun buildResumeCommand(project: Project, sessionId: String, name: String? = null): String {
+        return LaunchCommand.resume(getClaudeCommand(), getExtraLaunchArgs(project), sessionId, name)
     }
 
     /**
@@ -511,8 +574,13 @@ object TerminalHelper {
      * Executes the resume command in a terminal, trying multiple approaches.
      * This is designed to work from context menu actions where DataContext doesn't have terminal info.
      */
-    fun executeCommandInTerminal(project: Project, context: TerminalTabContext, sessionId: String): Boolean {
-        val command = buildResumeCommand(project, sessionId)
+    fun executeCommandInTerminal(
+        project: Project,
+        context: TerminalTabContext,
+        sessionId: String,
+        name: String? = null
+    ): Boolean {
+        val command = buildResumeCommand(project, sessionId, name)
 
         // APPROACH 1 (BEST): Match by stable tab id, falling back to name. Matching by name
         // alone is unreliable now that Claude Code renames every tab to "Claude Code".

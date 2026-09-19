@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-19
+
+### Added
+- Session title sync, both directions. A session renamed with `/rename` (or started with
+  `--name`) renames its bound tab within a few seconds; the name is the tab's persistent
+  name, so it survives IDE restarts. A tab renamed in the IDE renames its Claude session:
+  `/rename <name>` is typed into the session while it is idle, and a session that is busy,
+  waiting on a permission prompt or not running gets the name at its next auto-resume
+  (`--name`) or through the new tab-menu action "Push Tab Name to Claude Session".
+  The "Sync Claude /rename to terminal tab name" checkbox, present since 0.1.0, now does
+  something; "Push IDE tab renames to the Claude session" is new (both default on).
+- Registry files carry `title`: the session's Claude-side title, next to the IDE `tab`.
+
+### Changed
+- The launch profile rejects `--name` and `-n` (also inside combined short flags such as
+  `-dn`): session naming belongs to the plugin, like session selection.
+
+### Known limitations
+- A `/rename` typed into a session whose prompt box holds an unsent draft submits the
+  draft together with the command. The push happens only right after an IDE rename of
+  an idle session; turn off "Push IDE tab renames" to avoid it entirely.
+- The title is read from the transcript's last 256 KiB and the `custom-title.json`
+  sidecar; a session whose only record is older than that window and that was never
+  renamed interactively shows no title until it writes the next record.
+- A tab name containing `'`, `\`, `;`, `|`, `&`, `$`, `<`, `>` or a backtick is not
+  pushed (a balloon says why): `/rename` is typed unquoted and the plugin cannot prove
+  the tab still runs Claude rather than a shell prompt.
+
 ## [0.7.0] - 2026-09-17
 
 ### Added

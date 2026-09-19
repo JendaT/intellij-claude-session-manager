@@ -75,9 +75,11 @@ Each rule below was paid for by a live failure. Overriding one needs a dated rec
 - **D13 Files written outside the project** are limited to
   `~/.claude/hooks/session-notify.sh`, hook entries and `env` in `~/.claude/settings.json`
   (merged, never overwritten) and `~/.claude/ide-events/`.
-- **D14 The plugin owns session selection.** Per-project extra launch args are inserted
-  between the command and `--resume <id>`; the validator rejects `--resume`, `-r`,
-  `--continue`, `-c`, `--session-id` as tokens and every shell metacharacter (v0.7.0).
+- **D14 The plugin owns session selection and session naming.** Per-project extra
+  launch args are inserted between the command and `--resume <id>`; the validator
+  rejects `--resume`, `-r`, `--continue`, `-c`, `--session-id` as tokens and every
+  shell metacharacter (v0.7.0), and `--name`, `-n` since v0.8.0 (the plugin appends
+  `--name` itself for a pending tab-name push - amendment 2026-09-19).
 - **D15 Registry liveness belongs to the hook, placement to the plugin.** The hook
   script owns `state`, `pid`, `cwd` and the file lifecycle (create on SessionStart,
   delete on SessionEnd); the plugin owns `project` and `tab` (persistent name) and only
@@ -98,6 +100,8 @@ Each rule below was paid for by a live failure. Overriding one needs a dated rec
 | `tabIdentifier.persistentName` | terminal-persisted tab name; restart-stable |
 | `tabIdentifier.name` | display name at bind time (informational) |
 | `lastResumedAt`, `resumeCount`, `createdAt` | bookkeeping; drive dedup keeper choice |
+| `sessionTitle` | last `/rename` title observed for `currentSessionId` (v0.8.0) |
+| `pendingTitlePush` | IDE tab name not yet delivered to the session; sent as `--name` on the next auto-resume (v0.8.0) |
 
 Content UserData keys (`TerminalHelper`): `STABLE_TAB_KEY` (tab UUID),
 `TITLE_PROTECTED_KEY`, `DECORATED_KEY` (side effects applied once per IDE session),
@@ -157,6 +161,7 @@ outdated. The v1 `sessions.jsonl` append is gone.
 | `pid` | hook | nearest ancestor of the hook shell whose command is `claude`; readers `kill -0` it |
 | `updated_at` | both | ISO-8601 with offset, last change by either writer |
 | `project`, `tab` | plugin | IDE project name and the tab's persistent name; written on bind and rename |
+| `title` | plugin | the session's own title (`/rename`, `--name`), written when observed; never cleared (v0.8.0) |
 
 Lifecycle: created by the hook on SessionStart (or by the plugin on bind if earlier),
 merged by both writers through temp file + atomic rename, deleted by the hook on
@@ -190,7 +195,10 @@ the lazy-start caveat).
 
 `claudeCommand` (allowlist `[a-zA-Z0-9_./ -]`, default `claude`), `autoResumeEnabled`,
 `autoResumeDelayMs` (500-30000), `notifyOnSessionChange`, `notifyOnAutoDetection`,
-`syncTabNames`, `customClaudeHomePath`, `fileWatcherDebounceMs`, `maxHistoryPerBinding`,
+`syncTabNames` (inbound title sync: the session's `/rename` title becomes the tab's
+persistent name), `pushTabNameToSession` (outbound: an IDE rename is typed into an idle
+session as `/rename`, else delivered with `--name` at the next auto-resume - amendment
+2026-09-19), `customClaudeHomePath`, `fileWatcherDebounceMs`, `maxHistoryPerBinding`,
 `orphanedHistoryRetentionDays`, `forceOptionAsMetaKeyOff` (reverts the macOS
 "Option as Meta" toggle Claude keeps enabling), `protectTabNames`. The
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` env toggle is written to `~/.claude/settings.json`
@@ -208,8 +216,9 @@ rejected by the schema validator). Verified on a Max account without an organiza
 
 ## 8. User surface
 
-Terminal tab context menu (`Claude Session`): Bind to Session, Resume Session, Session
-History, Current Session Info, Copy Session ID, Unbind, Settings. Terminal "new tab"
+Terminal tab context menu (`Claude Session`): Bind to Session, Resume Session, Push
+Tab Name to Claude Session (v0.8.0), Session History, Current Session Info, Copy Session
+ID, Unbind, Settings. Terminal "new tab"
 dropdown: "Claude Session" (pick a session, opens a bound tab). Tab decoration: colored
 Claude icon, live-indicator badge while Claude reports progress, tooltip
 `Claude: <status>`, OSC title stripped from protected tabs.
@@ -228,6 +237,12 @@ Claude icon, live-indicator badge while Claude reports progress, tooltip
   session until project close or the 24 h sweep. `pid` exists for exactly this case.
 - Two writers share each registry file; a lost update between writes in the same
   millisecond is accepted and repaired by the next event.
+- Title sync types `/rename` into a session only right after an IDE rename and only
+  while the registry says the session is idle; a busy or waiting session gets the name
+  at its next auto-resume or through the tab-menu action. If the prompt box holds an
+  unsent draft at that moment, the draft is submitted together with the command.
+  Titles are read from the transcript tail (256 KiB) and the `custom-title.json`
+  sidecar, never from `sessions-index.json` (amendment 2026-09-19).
 
 ## 10. Removed
 
@@ -237,4 +252,5 @@ Claude icon, live-indicator badge while Claude reports progress, tooltip
 
 ## Amendments
 
-(none yet)
+- 2026-09-19 `docs/specs/2026-09-19-session-title-sync-amendment.md` - session title
+  sync (v0.8.0): sections 2 (D14), 3, 5, 7, 8, 9.

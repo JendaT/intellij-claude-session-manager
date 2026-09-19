@@ -69,7 +69,7 @@ class HookScriptTest {
         assertTrue(obj["updated_at"]!!.jsonPrimitive.content.matches(Regex("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}")))
 
         // The plugin adds its fields; the script must keep them from now on.
-        SessionRegistryService().upsert(id, "proj", "Local", null, File(events, "sessions"))
+        SessionRegistryService().upsert(id, "proj", "Local", dir = File(events, "sessions"))
 
         run(event("UserPromptSubmit"))
         obj = session()

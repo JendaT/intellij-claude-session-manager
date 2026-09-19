@@ -7,13 +7,19 @@ package com.github.jendalen.claudesessionmanager.util
  */
 object LaunchCommand {
 
-    /** `claude [extraArgs] --resume <sessionId>` */
-    fun resume(claudeCommand: String, extraArgs: String, sessionId: String): String {
-        // SECURITY: both inputs reach a shell. The session id must be a UUID and the
-        // extra args must pass the allowlist - callers re-validate on read, this is the
-        // last line.
+    /**
+     * `claude [extraArgs] --resume <sessionId> [--name '<name>']`. The name is a tab name
+     * the user gave in the IDE while the session could not be typed into; Claude writes
+     * it as the session's title on start, which is how a pending rename catches up.
+     */
+    fun resume(claudeCommand: String, extraArgs: String, sessionId: String, name: String? = null): String {
+        // SECURITY: every input reaches a shell. The session id must be a UUID, the
+        // extra args must pass the allowlist and the name must be single-quotable -
+        // callers re-validate on read, this is the last line.
         require(SessionIdValidator.isValid(sessionId)) { "Invalid session ID format: $sessionId" }
-        return join(claudeCommand, extraArgs, "--resume $sessionId")
+        val rest = if (name != null) arrayOf("--resume $sessionId", "--name ${SessionNameValidator.quoted(name)}")
+        else arrayOf("--resume $sessionId")
+        return join(claudeCommand, extraArgs, *rest)
     }
 
     /** `claude [extraArgs]` - a fresh session. */

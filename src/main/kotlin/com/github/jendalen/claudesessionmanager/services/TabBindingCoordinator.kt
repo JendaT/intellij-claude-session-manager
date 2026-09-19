@@ -183,7 +183,7 @@ class TabBindingCoordinator(private val project: Project) {
                     if (existing.currentSessionId.equals(sessionId, ignoreCase = true)) {
                         registerSession(sessionId, persistentName ?: tabName, workingDirectory)
                     }
-                    return existing
+                    return synced(existing)
                 }
                 bindingService.selfHealIdentity(existing.id, tabId, persistentName)
                 // Decorate here too, not only on create/adopt: a tab that reuses an existing
@@ -201,7 +201,7 @@ class TabBindingCoordinator(private val project: Project) {
                     logger.info("Session $sessionId already bound to '$tabName' (source=$source)")
                 }
                 registerSession(sessionId, persistentName ?: tabName, workingDirectory)
-                return bindingService.findBindingById(existing.id)
+                return synced(bindingService.findBindingById(existing.id))
             }
 
             // Low-confidence channels may neither create nor adopt (adoption rewrites an
@@ -229,7 +229,7 @@ class TabBindingCoordinator(private val project: Project) {
                     if (settings.notifyOnAutoDetection) {
                         notify("Claude session reconnected", "Re-attached '$persistentName' to: $info (via $source)")
                     }
-                    return bindingService.findBindingById(stale.id)
+                    return synced(bindingService.findBindingById(stale.id))
                 }
             }
 
@@ -258,11 +258,20 @@ class TabBindingCoordinator(private val project: Project) {
             if (settings.notifyOnAutoDetection) {
                 notify("Claude session detected", "Auto-bound '$tabName' to: $info (via $source)")
             }
-            return binding
+            return synced(binding)
         } catch (e: Exception) {
             logger.warn("Failed to bind session $sessionId (source=$source): ${e.message}", e)
             return null
         }
+    }
+
+    /**
+     * A bind is the moment a session's title becomes applicable to a tab: kick the title
+     * sync so a fresh bind or a SessionStart applies it within a second, not five.
+     */
+    private fun synced(binding: SessionBinding?): SessionBinding? {
+        if (binding != null) SessionTitleSyncService.getInstance(project).requestSync()
+        return binding
     }
 
     /**

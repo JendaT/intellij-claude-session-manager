@@ -17,6 +17,25 @@ Repo rules that apply to every step: comments explain WHY; guard-clause exits at
 settings classes are plain `var` + defaults; no emoji; nothing written under `~/.claude/`
 beyond D13 (the sidecar and the transcript are READ only).
 
+## Status (2026-09-19)
+
+- [x] Steps 1-11 implemented on `feature/session-title-sync`; 75 unit tests green,
+      `verifyPlugin` Compatible on WS-261/262/263, zip 0.8.0 built.
+- [x] Review: `/implement-reviewed-gpt` (gpt-6-astra, 3 passes, no Claude fleet) - 6
+      findings, all in the new files, all tagged NEEDS-REVIEW so the skill auto-applied
+      none. Reviewed and applied by hand, all six:
+      F2 binding writes moved to the EDT with re-read and tab/session revalidation;
+      PERF-01 registry read for the push moved to a pooled thread (push is now
+      callback-based); F3 a rename back to the session's title clears a stale pending
+      push; F5 tail-window truncation decided on the byte offset, not the decoded
+      length (regression test with Czech text); F4 `reapplyTitles()` runs when inbound
+      sync is switched on; F1 the typed `/rename` path additionally rejects
+      `; | & $ < >` and backticks, and a session whose registry entry names another IDE
+      project is not typed into. The full ownership check GPT asked for (prove the tab's
+      foreground process is that Claude pid) is not available through the terminal API;
+      the heuristic and the character rule are what shipped.
+- [ ] Live verification checklist (below) - not started.
+
 ## Step 1 - Binding model carries the title state
 
 Files: `model/SessionBinding.kt`, `services/BindingService.kt`,

@@ -9,16 +9,18 @@ package com.github.jendalen.claudesessionmanager.util
  * (`--channels plugin:<name>@<marketplace>`), which is why `:` and `@` are allowed here
  * although the global `claudeCommand` allowlist rejects them.
  *
- * Session selection stays with the plugin: flags that would pick or fork a session are
- * rejected as whole tokens, so extra args can never redirect which session is resumed.
+ * Session selection and naming stay with the plugin: flags that would pick or fork a
+ * session, or name it, are rejected as whole tokens, so extra args can never redirect
+ * which session is resumed or override a tab-name push.
  */
 object LaunchArgsValidator {
 
     private val ALLOWED = Regex("[A-Za-z0-9_.:=/ ,@-]*")
 
     private val RESERVED_FLAGS = setOf(
-        // Session selection stays with the plugin.
-        "--resume", "-r", "--continue", "-c", "--session-id",
+        // Session selection and naming stay with the plugin (the plugin appends --name
+        // itself when a tab rename is pending).
+        "--resume", "-r", "--continue", "-c", "--session-id", "--name", "-n",
         // The value is read from .idea/workspace.xml inside the checkout, and nothing
         // forces that file to be gitignored. These flags load a file, run a command at
         // launch or widen what Claude may do without asking - a cloned repository must
@@ -29,7 +31,7 @@ object LaunchArgsValidator {
         "--system-prompt-file", "--add-dir", "--plugin-dir"
     )
 
-    private val COMBINED_SHORT_RESERVED = Regex("^-[a-zA-Z]*[rc][a-zA-Z]*$")
+    private val COMBINED_SHORT_RESERVED = Regex("^-[a-zA-Z]*[rcn][a-zA-Z]*$")
 
     /**
      * Returns the normalised value (trimmed, runs of spaces collapsed; empty for blank
@@ -44,7 +46,8 @@ object LaunchArgsValidator {
         val reserved = collapsed.split(' ').any { token ->
             token in RESERVED_FLAGS || token.substringBefore('=') in RESERVED_FLAGS ||
                 // Combined short flags: `-cd` is `--continue --debug`, `-vr` carries
-                // `--resume`. Anything single-dash containing r or c selects a session.
+                // `--resume`, `-dn` carries `--name`. Anything single-dash containing
+                // r, c or n selects or names a session.
                 COMBINED_SHORT_RESERVED.matches(token)
         }
         return if (reserved) null else collapsed
@@ -58,7 +61,7 @@ object LaunchArgsValidator {
         if (raw.any { it == '\n' || it == '\r' || it == '\t' }) return "Must be a single line"
         val offending = raw.trim().firstOrNull { !ALLOWED.matches(it.toString()) }
         if (offending != null) return "Character '$offending' is not allowed (letters, digits, and _ . : = / , @ - only)"
-        return "Session selection flags are managed by the plugin, and flags that load files or change permissions " +
+        return "Session selection and naming flags are managed by the plugin, and flags that load files or change permissions " +
             "(--mcp-config, --settings, --permission-mode, --dangerously-skip-permissions, --allowedTools, " +
             "--append-system-prompt-file, --add-dir) are not allowed in a launch profile"
     }
