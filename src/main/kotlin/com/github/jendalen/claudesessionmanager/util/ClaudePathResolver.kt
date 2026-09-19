@@ -144,22 +144,68 @@ object ClaudePathResolver {
      * Checks if a session's JSONL file exists in any project directory.
      * This is the ground truth for session existence - independent of sessions-index.json.
      */
-    fun sessionFileExists(sessionId: String): Boolean {
+    fun sessionFileExists(sessionId: String): Boolean = findSessionFile(sessionId) != null
+
+    /**
+     * The session's transcript, wherever it lives under `projects/`, or null.
+     */
+    fun findSessionFile(sessionId: String): File? {
         // Validate UUID format to prevent path traversal
         if (!sessionId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
             logger.warn("Invalid session ID format for file check: $sessionId")
-            return false
+            return null
         }
 
         val projectsDir = getProjectsDirectory()
-        if (!projectsDir.exists() || !projectsDir.isDirectory) return false
+        if (!projectsDir.exists() || !projectsDir.isDirectory) return null
 
         val filename = "$sessionId.jsonl"
         return projectsDir.listFiles()
             ?.filter { it.isDirectory }
-            ?.any { projectDir -> File(projectDir, filename).exists() }
-            ?: false
+            ?.map { projectDir -> File(projectDir, filename) }
+            ?.firstOrNull { it.exists() }
     }
+
+    /**
+     * The working directory the session runs in, read from its transcript.
+     *
+     * The transcript's directory name cannot be used for this: Claude encodes every
+     * non-alphanumeric character as `-`, so `/Shop` and `/Shop-worktree1` become
+     * prefixes of each other and a prefix test says the wrong thing (the exact trap that
+     * once matched worktree paths to their parent). The records themselves carry the
+     * real path: the first few lines are meta records with `cwd: null`, then every
+     * message record has it. Scans at most [maxLines] lines and never loads the file.
+     */
+    fun readSessionCwd(sessionFile: File, maxLines: Int = 20): String? {
+        if (!sessionFile.isFile) return null
+        return try {
+            sessionFile.bufferedReader().use { reader ->
+                var n = 0
+                var line = reader.readLine()
+                while (line != null && n < maxLines) {
+                    val cwd = cwdOfRecord(line)
+                    if (!cwd.isNullOrBlank()) return cwd
+                    n++
+                    line = reader.readLine()
+                }
+                null
+            }
+        } catch (e: Exception) {
+            logger.info("Could not read cwd from ${sessionFile.name}: ${e.message}")
+            null
+        }
+    }
+
+    private val lenientJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private fun cwdOfRecord(line: String): String? =
+        try {
+            val obj = lenientJson.parseToJsonElement(line) as? kotlinx.serialization.json.JsonObject ?: return null
+            val cwd = obj["cwd"] as? kotlinx.serialization.json.JsonPrimitive ?: return null
+            if (cwd.isString) cwd.content else null
+        } catch (e: Exception) {
+            null
+        }
 
     /**
      * Checks if Claude CLI appears to be installed by looking for common indicators.

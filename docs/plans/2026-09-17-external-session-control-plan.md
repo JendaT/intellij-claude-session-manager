@@ -215,7 +215,11 @@ Two defects found in the same run:
    elsewhere before resuming. The registry already carries what is needed to prevent
    this: before resuming, read `sessions/<id>.json`; a live `pid` with a different
    `cwd`/`project` means the session is running elsewhere - do not resume, do not
-   type into the tab. Follow-up, roadmap.
+   type into the tab. **Fixed 2026-09-19:** `SessionRegistryService.read` +
+   `Entry.isLive()` (`ProcessHandle`, no shell); `AutoResumeService` skips a binding
+   whose session has a live pid and logs where it runs. The sweep keeps files with a
+   live pid however old - otherwise a day-idle session's file would be swept and the
+   guard would see nothing.
 2. **Registry `project`/`tab` never written for two of the four worktree sessions**
    (`c12ac491` worktree1, `a2bac8d5` worktree4). Traced for `a2bac8d5`: the output
    channel confirmed it twice (12:15:27, 12:15:31), both inside the 15 s auto-resume
@@ -224,7 +228,9 @@ Two defects found in the same run:
    after the window closed. For `c12ac491` the output channel never matched at all.
    Suppression exists to stop a binding being CHANGED during the storm; publishing an
    unchanged, existing binding to the registry is safe there. Fix: call
-   `registerSession` on the suppressed-existing path too. One line; not yet made.
+   `registerSession` on the suppressed-existing path too. **Fixed 2026-09-19**, guarded
+   on the suppressed event naming the session that IS bound - a misattributed event for
+   another session must not publish this tab into that session's file.
 3. **The output channel binds on any bare UUID printed in a tab.** In IDEA, tab 'Main
    dev' (session `4e695d61`) was rebound to `be6e9fc5` and then to `b9851854` - both
    Warp sessions in `channel-spike` - purely because their ids appeared in tool
@@ -242,7 +248,12 @@ Two defects found in the same run:
    (`~/.claude/projects/<encoded cwd>/<id>.jsonl`; compare encoded project path with
    the directory-boundary rule) or the registry file's `cwd` when present. Not yet
    made. Until it is, external readers must treat `cwd` as authoritative and
-   `project`/`tab` as advisory.
+   `project`/`tab` as advisory. **Fixed 2026-09-19:** the delayed verification resolves
+   the session's cwd (index `projectPath`, else registry `cwd`, else the transcript's
+   records via `ClaudePathResolver.readSessionCwd` - the encoded directory name is
+   unusable, `Shop` and `Shop-worktree1` encode as prefixes of each other) and
+   refuses on mismatch or on no cwd at all. Same directory-boundary rule as the hook
+   channel (`isPathMatch`).
 
 Also observed 12:31, WebStorm closed: `RegistryProjectCloseListener` fired for every
 project - 30 "Session registry: removed" lines, registry down from 30 files to 6, and
@@ -257,7 +268,8 @@ was alive (the Warp session's; the 13 IDE ones connected their MCP, then died on
 `Bun.serve` EADDRINUSE). Per-worktree targeting is the orchestrator spec §3.4's job (outbound
 long-poll, no port), not something the spike can do.
 
-**Release note.** All three acceptance criteria hold, but two of the three defects
+**Release note (superseded 2026-09-19 - all three fixed, 55 tests).** All three
+acceptance criteria hold, but two of the three defects
 corrupt the field external readers are meant to consume (`project`/`tab`, defects 2
 and 3) and the third resumes one transcript in two processes (defect 1). Defect 2 is
 one line; defect 3 reuses a guard that already exists on the other channel; defect 1

@@ -110,6 +110,7 @@ class AutoResumeService : ProjectActivity {
         val missingBindings = mutableListOf<SessionBinding>()
         val staleBindings = mutableListOf<SessionBinding>()
         var failedCount = 0
+        var runningElsewhereCount = 0
         val handledSessionIds = mutableSetOf<String>()
 
         // Resume each binding
@@ -136,6 +137,21 @@ class AutoResumeService : ProjectActivity {
                     "(current ${binding.currentSessionId} was never persisted - empty resume fork)")
                 handledSessionIds.add(resumableSessionId.lowercase())
             }
+            // Bindings are per project per IDE, and the same session can be bound in two
+            // of them (a stale binding survives in the project the session was moved out
+            // of). Typing `--resume` into the second tab starts a second process on the
+            // same transcript - observed 2026-09-19, WebStorm resuming a session IDEA had
+            // been running for a day. The registry file already says whether a process
+            // is running; ask it before typing anything. The tab is left exactly as the
+            // IDE restored it - no icon, no command - so the user sees a plain shell.
+            val owner = SessionRegistryService.getInstance().read(resumableSessionId)
+            if (owner != null && owner.isLive()) {
+                logger.info("Not resuming session $resumableSessionId in tab '${binding.tabIdentifier.effectiveName}': " +
+                    "its process (pid ${owner.pid}) is alive in ${owner.cwd ?: "an unknown directory"}" +
+                    (owner.project?.let { " (project '$it', tab '${owner.tab ?: "?"}')" } ?: ""))
+                runningElsewhereCount++
+                continue
+            }
             val (outcome, content) = resumeBinding(project, binding, bindingService, resumableSessionId)
             when (outcome) {
                 ResumeOutcome.RESUMED -> {
@@ -145,6 +161,9 @@ class AutoResumeService : ProjectActivity {
                 ResumeOutcome.MISSING -> missingBindings.add(binding)
                 ResumeOutcome.FAILED -> failedCount++
             }
+        }
+        if (runningElsewhereCount > 0) {
+            logger.info("$runningElsewhereCount binding(s) left alone: their sessions are running in another IDE or terminal")
         }
 
         // The resume commands are only queued for tabs whose shell has not started.

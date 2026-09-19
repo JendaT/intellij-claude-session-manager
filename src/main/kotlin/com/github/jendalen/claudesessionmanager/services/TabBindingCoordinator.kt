@@ -173,6 +173,14 @@ class TabBindingCoordinator(private val project: Project) {
             if (existing != null) {
                 if (suppressed) {
                     logger.info("Bind suppressed during auto-resume window: session=$sessionId, tab='$tabName', source=$source")
+                    // Suppression stops a binding being CHANGED during the resume storm.
+                    // Publishing the binding that already exists is not a change, and for
+                    // a session whose only confirmation lands inside the window this is
+                    // the only chance it gets: 2 of 4 worktree sessions never got
+                    // project/tab in the registry because of this early return.
+                    if (existing.currentSessionId.equals(sessionId, ignoreCase = true)) {
+                        registerSession(sessionId, persistentName ?: tabName, workingDirectory)
+                    }
                     return existing
                 }
                 bindingService.selfHealIdentity(existing.id, tabId, persistentName)

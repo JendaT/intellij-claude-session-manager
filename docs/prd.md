@@ -161,8 +161,15 @@ outdated. The v1 `sessions.jsonl` append is gone.
 Lifecycle: created by the hook on SessionStart (or by the plugin on bind if earlier),
 merged by both writers through temp file + atomic rename, deleted by the hook on
 SessionEnd and by the plugin on project close (`RegistryProjectCloseListener`); files
-older than 24 h are swept once per IDE process and on hook reinstall. The plugin never
-lists the directory to learn about foreign sessions.
+older than 24 h whose `pid` is no longer running are swept once per IDE process and on
+hook reinstall - a live process keeps its file however old, since the hook only rewrites
+on events and an idle session's file goes stale while the session does not. The plugin
+never lists the directory to learn about foreign sessions; its only read is of a file
+named by a session id it already holds (`SessionRegistryService.read`), used in two
+places: auto-resume skips a session whose `pid` is alive (it is running in another IDE
+or terminal - typing `--resume` again would start a second process on the same
+transcript), and the output channel takes `cwd` from it when deciding whether a session
+id seen in a tab's output belongs under this project at all.
 
 ## 6. Startup and restart flow
 

@@ -1,6 +1,6 @@
 ---
 type: roadmap
-last_updated: 2026-09-17
+last_updated: 2026-09-19
 ---
 
 # Claude Session Manager - roadmap
@@ -27,8 +27,10 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   `docs/plans/2026-09-17-external-session-control-plan.md`. Code complete as v0.7.0
   (per-project extra launch args, session registry with idle/busy/waiting state and pid
   under `~/.claude/ide-events/sessions/`, eager launch of every restored tab, teams
-  module removed); installed in both IDEs, awaiting live verification after restart and
-  the hook reinstall.
+  module removed). Live-verified 2026-09-18 (IDEA) and 2026-09-19 (WebStorm, 28
+  bindings); the three defects that run exposed are fixed (registry liveness before
+  resume, output-channel cwd guard, suppressed-path publish). Awaiting `verifyPlugin`
+  and release.
 
 ## Backlog
 
@@ -39,8 +41,9 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
 - [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).
 - [x] `sessions.jsonl` append removed from the hook script (v0.7.0). The 1.1 MB file on
   disk can be deleted by hand; nothing reads it.
-- [x] Tests: 48 across validators, command assembly, resume fallback, hook installer,
-  registry service and the hook script itself (run under bash + jq).
+- [x] Tests: 55 across validators, command assembly, resume fallback, hook installer,
+  registry service (read, sweep liveness), transcript cwd reader, path matching, and the
+  hook script itself (run under bash + jq).
 - [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` once the v2 hook is live.
 - [ ] Orphaned bindings whose tabs were closed weeks ago survive every restart (4 of 23
   in the 2026-08-05 audit) until dismissed via the missing-tabs notification. Consider
@@ -51,14 +54,14 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
 - [ ] Registry `waiting` covers permission prompts only; MCP elicitation dialogs
   (`notification_type: elicitation_dialog`) also block a session and could map to the
   same state.
-- [ ] **Do not resume a session that is running elsewhere.** 2026-09-19: WebStorm
+- [x] **Do not resume a session that is running elsewhere.** 2026-09-19: WebStorm
   resumed `4e695d61` (a stale Shop binding) while IDEA was already running it - two
   processes on one transcript. Bindings are per project per IDE and nothing checks for
   a live process before typing the resume command. The registry has what is needed:
   read `sessions/<id>.json` first; a live `pid` (`kill -0`) with a different `cwd` means
   the session is running elsewhere - skip it, log which project/tab owns it, and leave
   the tab alone. Plan defect 1.
-- [ ] **Output channel needs the cwd guard the hook channel already has.** It binds a
+- [x] **Output channel needs the cwd guard the hook channel already has.** It binds a
   tab to ANY session UUID printed in that tab's output if a transcript exists anywhere
   (`sessionFileExists` is global). Printing another session's id - a `cat` of a registry
   file, a grep of a log, an orchestrator inspecting its workers - rebinds the tab and then
@@ -66,7 +69,7 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   session's cwd from the transcript's directory (`~/.claude/projects/<encoded cwd>/`,
   directory-boundary compare against the encoded project path) or the registry `cwd`,
   and reject a mismatch the same way `ClaudeHookEventService` does. Plan defect 3.
-- [ ] **`registerSession` on the suppressed-existing bind path.** During the 15 s
+- [x] **`registerSession` on the suppressed-existing bind path.** During the 15 s
   auto-resume window an existing binding is returned without publishing to the registry,
   so a session whose only output-channel confirmation lands inside the window never gets
   `project`/`tab`. Publishing an unchanged binding is safe there. One line. Plan defect 2.

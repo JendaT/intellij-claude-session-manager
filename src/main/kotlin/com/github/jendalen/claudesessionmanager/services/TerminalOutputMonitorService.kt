@@ -465,22 +465,56 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 val sessionService = ClaudeSessionService.getInstance(project)
                 sessionService.invalidateCache()
                 val session = sessionService.findSessionByIdGlobal(sessionId)
+                val sessionFile = if (session == null) ClaudePathResolver.findSessionFile(sessionId) else null
 
-                if (session != null) {
-                    tabMonitor.lastDetectedSessionId = session.sessionId.lowercase()
-                    updateBindingForSession(tabMonitor, session.sessionId, session)
-                } else if (ClaudePathResolver.sessionFileExists(sessionId)) {
-                    // Session file exists but not in any index - still bind
-                    tabMonitor.lastDetectedSessionId = sessionId.lowercase()
-                    updateBindingForSession(tabMonitor, sessionId, null)
-                    logger.info("Bound session $sessionId found via JSONL file (not in any index)")
-                } else {
+                if (session == null && sessionFile == null) {
                     logger.debug("UUID $sessionId is not a known Claude session")
+                    return@launch
+                }
+
+                // A UUID in this tab's output is not proof that the session runs in this
+                // tab: `cat` of a registry file, a grep through a log, an orchestrator
+                // listing its workers - all print other sessions' ids, and every one of
+                // them used to rebind the tab (observed 2026-09-19: an IDEA tab rebound to
+                // two Warp sessions from another repo, which then had that tab written
+                // into their registry files). The hook channel already refuses an event
+                // whose cwd is outside the project; this channel may MOVE a session, so
+                // it must be at least as strict. Without a cwd there is nothing to check
+                // against, and a session this channel cannot place is not bound by it.
+                val cwd = resolveSessionCwd(sessionId, session, sessionFile)
+                val projectPath = project.basePath
+                if (cwd == null || projectPath == null || !ClaudePathResolver.isPathMatch(projectPath, cwd)) {
+                    logger.info("Output-channel bind skipped: session $sessionId runs in '${cwd ?: "unknown cwd"}', " +
+                        "not under project '$projectPath' (tab='${tabMonitor.tabName}')")
+                    return@launch
+                }
+
+                tabMonitor.lastDetectedSessionId = sessionId.lowercase()
+                updateBindingForSession(tabMonitor, session?.sessionId ?: sessionId, session)
+                if (session == null) {
+                    logger.info("Bound session $sessionId found via JSONL file (not in any index)")
                 }
             } finally {
                 tabMonitor.pendingVerifications.remove(sessionId)
             }
         }
+    }
+
+    /**
+     * Where the session runs, from the cheapest source that has it: the index entry's
+     * project path, then the registry file the hook wrote (exact cwd, present once the
+     * session has started), then the transcript's own records. Null when none of them
+     * knows - the caller treats that as "cannot place", not "anywhere".
+     */
+    private fun resolveSessionCwd(
+        sessionId: String,
+        indexed: com.github.jendalen.claudesessionmanager.model.ClaudeSession?,
+        sessionFile: java.io.File?
+    ): String? {
+        indexed?.projectPath?.takeIf { it.isNotBlank() }?.let { return it }
+        SessionRegistryService.getInstance().read(sessionId)?.cwd?.takeIf { it.isNotBlank() }?.let { return it }
+        val file = sessionFile ?: ClaudePathResolver.findSessionFile(sessionId) ?: return null
+        return ClaudePathResolver.readSessionCwd(file)
     }
 
     /**

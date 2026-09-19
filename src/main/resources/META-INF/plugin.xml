@@ -40,6 +40,17 @@
                 selected tab of each project. Restored terminal tabs start their shell lazily
                 on first display; the plugin now shows each restored tab once so the queued
                 resume command runs.</li>
+            <li>Fixed: a session already running in another IDE or terminal is not resumed a
+                second time. Auto-resume reads the session's registry file first and leaves
+                the tab alone while its process is alive; the registry sweep keeps such files
+                however old they are.</li>
+            <li>Fixed: the terminal-output channel no longer binds a tab to any session id that
+                merely appears in its output. It now checks the session's working directory
+                against the project, as the hook channel already did, so printing another
+                session's id cannot rebind the tab or mislabel that session's registry
+                file.</li>
+            <li>Fixed: registry project/tab are published for sessions confirmed only inside
+                the auto-resume suppression window.</li>
             <li>Removed: the experimental Agent Teams module (dashboard, teammate tabs,
                 settings page). Subagents are managed inside one session now.</li>
         </ul>

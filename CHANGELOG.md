@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After an IDE restart every bound tab launches Claude, not only the selected tab of each
   project. The reworked terminal starts restored tabs' shells lazily on first display and
   buffers sent text until then; the plugin now shows each restored tab once.
+- A session already running in another IDE or terminal is no longer resumed a second
+  time. Bindings are per project per IDE, so a stale binding elsewhere used to start a
+  second process on the same transcript; auto-resume now reads the session's registry
+  file first and leaves the tab alone when its `pid` is alive. The 24 h registry sweep
+  likewise keeps files whose process is alive, however old.
+- The terminal-output channel no longer binds a tab to any session id that merely
+  appears in its output. Printing another session's id (`cat` of a registry file, a log
+  grep, an orchestrator listing its workers) used to rebind the tab and then write that
+  tab into the wrong session's registry file. The channel now checks the session's
+  working directory - from the index, the registry, or the transcript itself - against
+  the project, the same guard the hook channel already had.
+- Registry `project`/`tab` are published for a session whose only binding confirmation
+  lands inside the auto-resume suppression window; previously that path returned early
+  and the fields stayed absent.
 
 ### Removed
 - The experimental Agent Teams module (dashboard, teammate tabs, settings page, actions).

@@ -46,6 +46,17 @@ class SessionRegistryService {
 
         /** Same location the hook script uses; independent of the custom Claude home. */
         fun defaultDirectory(): File = File(System.getProperty("user.home"), ".claude/ide-events/sessions")
+
+        /**
+         * `kill -0` without a shell. A pid whose process has exited reads as dead; a reused
+         * pid reads as alive, which is accepted - it errs on the side of not resuming.
+         */
+        fun isProcessAlive(pid: Long): Boolean =
+            try {
+                ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+            } catch (e: Exception) {
+                false
+            }
     }
 
     /**
@@ -87,22 +98,78 @@ class SessionRegistryService {
     }
 
     /**
-     * Deletes files older than [olderThanMs] (by modification time) - backstop for
-     * sessions whose SessionEnd never fired (killed IDE). Runs once per IDE process when
-     * called through [sweepOnce]; can be re-run explicitly (hook reinstall).
+     * What the registry knows about one session. [cwd], [state] and [pid] come from the
+     * hook script, [project] and [tab] from a plugin; any of them may be absent.
+     */
+    data class Entry(
+        val sessionId: String,
+        val cwd: String?,
+        val state: String?,
+        val pid: Long?,
+        val project: String?,
+        val tab: String?
+    ) {
+        /** True when the hook recorded a Claude process for this session and it is still running. */
+        fun isLive(): Boolean = pid != null && isProcessAlive(pid)
+    }
+
+    /**
+     * Reads the entry for [sessionId], or null when there is none or it is unreadable.
+     *
+     * This is the one read the plugin does, and it stays inside the addressing rule:
+     * only a file named by a session id the caller already holds, never a scan of the
+     * directory to discover other processes' sessions. Added after WebStorm resumed a
+     * session IntelliJ IDEA was still running - the file already said so (`pid` alive,
+     * `cwd` another project) and nothing looked.
+     */
+    fun read(sessionId: String, dir: File = defaultDirectory()): Entry? {
+        if (!SessionIdValidator.isValid(sessionId)) return null
+        val file = File(dir, "${sessionId.lowercase()}.json")
+        if (!file.isFile) return null
+        val obj = readObject(file)
+        if (obj.isEmpty()) return null
+        fun str(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val pid = (obj["pid"] as? JsonPrimitive)?.content?.toLongOrNull()
+        return Entry(
+            sessionId = sessionId.lowercase(),
+            cwd = str("cwd"),
+            state = str("state"),
+            pid = pid,
+            project = str("project"),
+            tab = str("tab")
+        )
+    }
+
+    /**
+     * Deletes files older than [olderThanMs] (by modification time) whose recorded
+     * process is no longer running - backstop for sessions whose SessionEnd never fired
+     * (killed IDE). A file whose `pid` is alive is kept however old it is: the hook only
+     * rewrites on events, so a session left idle for a day has an old file and a live
+     * process, and deleting it would let [read] report "not running" to a resume that
+     * then starts a second copy. Runs once per IDE process when called through
+     * [sweepOnce]; can be re-run explicitly (hook reinstall).
      */
     fun sweep(olderThanMs: Long = SWEEP_AGE_MS, dir: File = defaultDirectory()): Int {
         val cutoff = System.currentTimeMillis() - olderThanMs
         val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return 0
         var removed = 0
+        var keptLive = 0
         for (file in files) {
             try {
-                if (file.lastModified() < cutoff && file.delete()) removed++
+                if (file.lastModified() >= cutoff) continue
+                val pid = (readObject(file)["pid"] as? JsonPrimitive)?.content?.toLongOrNull()
+                if (pid != null && isProcessAlive(pid)) {
+                    keptLive++
+                    continue
+                }
+                if (file.delete()) removed++
             } catch (e: Exception) {
                 logger.debug("Sweep could not delete ${file.name}: ${e.message}")
             }
         }
-        if (removed > 0) logger.info("Session registry: swept $removed stale file(s)")
+        if (removed > 0 || keptLive > 0) {
+            logger.info("Session registry: swept $removed stale file(s), kept $keptLive with a live process")
+        }
         return removed
     }
 
