@@ -143,7 +143,10 @@ class ClaudeHookManager {
         val scriptText = if (hookScript.exists()) hookScript.readText() else ""
         val hookScriptExists = scriptText.contains("ide-events")
         val hookScriptCurrent = scriptText.contains(HOOK_VERSION_MARKER)
-        val missingEvents = HOOK_EVENTS.map { it.first }.filterNot { checkHookInSettings(settingsFile, it) }
+        val hooksObject = readHooksObject(settingsFile)
+        val missingEvents = HOOK_EVENTS.map { it.first }.filterNot { event ->
+            hooksObject?.get(event)?.jsonArray?.any { it.isOurEntry() } == true
+        }
         val hookInSettings = missingEvents.isEmpty()
 
         if (!settingsFile.exists()) {
@@ -195,15 +198,23 @@ class ClaudeHookManager {
                 logger.warn("Refusing to write hook script: ${hookScript.absolutePath} is a symbolic link")
                 return false to "Hook script path is a symbolic link; remove it and install again"
             }
-            hookScript.writeText(hookScriptContent)
+            // Written to a sibling temp file and renamed into place: bash reads a script
+            // incrementally, and PreToolUse runs this one on every tool call of every
+            // live session, so a truncate-and-write could be executed half-written.
+            val tmp = File(hooksDir, ".$HOOK_SCRIPT_NAME.${System.nanoTime()}.tmp")
+            tmp.writeText(hookScriptContent)
             try {
                 java.nio.file.Files.setPosixFilePermissions(
-                    hookScript.toPath(),
+                    tmp.toPath(),
                     java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x")
                 )
             } catch (e: UnsupportedOperationException) {
-                hookScript.setExecutable(true)
+                tmp.setExecutable(true)
             }
+            java.nio.file.Files.move(
+                tmp.toPath(), hookScript.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
             logger.info("Created hook script: ${hookScript.absolutePath}")
 
             // Update settings.json
@@ -258,16 +269,19 @@ class ClaudeHookManager {
     /**
      * Check if our hook is configured in settings.json for [event].
      */
-    private fun checkHookInSettings(settingsFile: File, event: String): Boolean {
-        if (!settingsFile.exists()) return false
-
+    /**
+     * The `hooks` object of settings.json, or null when the file is absent, has none, or
+     * does not parse. Parsed once per status check (six events used to mean six reads
+     * and parses, on the EDT), and a parse failure says so at INFO - it used to show as
+     * "not installed" for every event with nothing in the log explaining why.
+     */
+    private fun readHooksObject(settingsFile: File): JsonObject? {
+        if (!settingsFile.exists()) return null
         return try {
-            val json = Json.parseToJsonElement(settingsFile.readText()).jsonObject
-            val entries = json["hooks"]?.jsonObject?.get(event)?.jsonArray ?: return false
-            entries.any { it.isOurEntry() }
+            Json.parseToJsonElement(settingsFile.readText()).jsonObject["hooks"]?.jsonObject
         } catch (e: Exception) {
-            logger.debug("Error checking settings.json: ${e.message}")
-            false
+            logger.info("Cannot read hooks from ${settingsFile.absolutePath}: ${e.message}")
+            null
         }
     }
 

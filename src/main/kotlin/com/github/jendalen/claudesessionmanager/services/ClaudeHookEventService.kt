@@ -250,7 +250,9 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
             scope.launch {
                 for ((index, delayMs) in RETRY_DELAYS_MS.withIndex()) {
                     delay(delayMs)
-                    sessionService.invalidateCache()
+                    // No cache wipe (see the output monitor's retry): four wipes per
+                    // SessionStart during a resume storm meant ~2000 index reads for
+                    // nothing but a log line.
                     val foundSession = sessionService.findSessionByIdGlobal(event.sessionId)
 
                     if (foundSession != null) {

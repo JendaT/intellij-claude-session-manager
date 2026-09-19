@@ -35,22 +35,35 @@ data class ClaudeSession(
      * Returns the creation timestamp as Instant.
      * Falls back to fileMtime if parsing fails.
      */
-    fun createdInstant(): Instant = try {
-        Instant.parse(created)
-    } catch (e: DateTimeParseException) {
-        logger.warn("Failed to parse created timestamp '$created' for session $sessionId, using fileMtime")
-        Instant.ofEpochMilli(fileMtime)
-    }
+    fun createdInstant(): Instant = parsedCreated
 
     /**
      * Returns the modification timestamp as Instant.
      * Falls back to fileMtime if parsing fails.
      */
-    fun modifiedInstant(): Instant = try {
-        Instant.parse(modified)
-    } catch (e: DateTimeParseException) {
-        logger.warn("Failed to parse modified timestamp '$modified' for session $sessionId, using fileMtime")
-        Instant.ofEpochMilli(fileMtime)
+    fun modifiedInstant(): Instant = parsedModified
+
+    // Parsed once per instance. These feed a sort selector (called ~2 N log N times per
+    // getSessions()), a picker cell renderer and a context-menu update(); one malformed
+    // entry used to cost a DateTimeParseException plus a WARN line on every one of those
+    // calls. Delegated properties are skipped by kotlinx.serialization, so the wire shape
+    // of this @Serializable class is unchanged.
+    private val parsedCreated: Instant by lazy {
+        try {
+            Instant.parse(created)
+        } catch (e: DateTimeParseException) {
+            logger.warn("Failed to parse created timestamp '$created' for session $sessionId, using fileMtime")
+            Instant.ofEpochMilli(fileMtime)
+        }
+    }
+
+    private val parsedModified: Instant by lazy {
+        try {
+            Instant.parse(modified)
+        } catch (e: DateTimeParseException) {
+            logger.warn("Failed to parse modified timestamp '$modified' for session $sessionId, using fileMtime")
+            Instant.ofEpochMilli(fileMtime)
+        }
     }
 
     /**

@@ -150,33 +150,40 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             return
         }
 
+        // Declared outside the try so the failure path can release them: a monitorTab
+        // that failed halfway used to leave its disposable registered under the service
+        // and its rename listener on the Content, and the retry added a second listener.
+        var tabDisposable: Disposable? = null
+        var renameListener: PropertyChangeListener? = null
         try {
             // Per-tab disposable created first so every listener below is tied to it and
             // released together when the tab closes (see stopMonitoringTab).
-            val tabDisposable = Disposer.newDisposable("TerminalOutputMonitor-$tabId")
-            Disposer.register(this, tabDisposable)
+            val disposable = Disposer.newDisposable("TerminalOutputMonitor-$tabId")
+            Disposer.register(this, disposable)
+            tabDisposable = disposable
 
             // Listen for tab renames purely to keep the monitor's display label current for logs.
             // Renames no longer affect binding identity (that is keyed on the stable id).
-            val renameListener = PropertyChangeListener { evt ->
+            val listener = PropertyChangeListener { evt ->
                 if (evt.propertyName == Content.PROP_DISPLAY_NAME) {
                     val newName = evt.newValue as? String ?: return@PropertyChangeListener
                     monitoredTabs[tabId]?.tabName = newName
                 }
             }
-            content.addPropertyChangeListener(renameListener)
+            content.addPropertyChangeListener(listener)
+            renameListener = listener
 
             // Create tab monitor
             val tabMonitor = TabMonitor(
                 tabId = tabId,
                 tabName = tabName,
                 tab = tab,
-                disposable = tabDisposable,
+                disposable = disposable,
                 content = content,
-                renameListener = renameListener
+                renameListener = listener
             )
             tabMonitor.activityAlarm = com.intellij.util.Alarm(
-                com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, tabDisposable
+                com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, disposable
             )
             monitoredTabs[tabId] = tabMonitor
 
@@ -223,7 +230,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                             }
                         }
                     }
-                }, tabDisposable)
+                }, disposable)
             } catch (e: Exception) {
                 logger.warn("Could not attach title listener for '$tabName' - title protection and persistent-name sync are off for this tab: ${e.message}")
             }
@@ -254,6 +261,8 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             // every later monitorTab() for this tab a silent no-op ("already monitored")
             // for the life of the project. Drop it so the next tabAdded/start can retry.
             monitoredTabs.remove(tabId)
+            renameListener?.let { content.removePropertyChangeListener(it) }
+            tabDisposable?.let { Disposer.dispose(it) }
             logger.warn("Failed to monitor tab '$tabName': ${e.message}", e)
         }
     }
@@ -286,7 +295,10 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             if (status.isNotEmpty() && status != tabMonitor.lastStatus) {
                 tabMonitor.lastStatus = status
                 try {
-                    tabMonitor.content.description = "Claude: $status"
+                    // Content.description is the tab tooltip and the platform renders it as
+                    // HTML; the status comes from an OSC title any process in the tab can set.
+                    // Same class as the notification <img src> fetch fixed in run 1.
+                    tabMonitor.content.description = "Claude: " + com.intellij.openapi.util.text.StringUtil.escapeXmlEntities(status)
                 } catch (e: Exception) {
                     logger.debug("Failed to set tab tooltip: ${e.message}")
                 }
@@ -374,6 +386,9 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             foundUuids.add(uuidMatcher.group().lowercase())
         }
 
+        // The tab's own bound id sits on screen for as long as Claude runs; it must not
+        // cost a getSessions() per redraw.
+        foundUuids.remove(tabMonitor.lastDetectedSessionId)
         if (foundUuids.isEmpty()) return
 
         // Check each UUID against sessions-index.json
@@ -382,8 +397,6 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         val sessionIds = sessions.associateBy { it.sessionId.lowercase() }
 
         for (uuid in foundUuids) {
-            // Skip if this UUID was already processed for this tab
-            if (uuid == tabMonitor.lastDetectedSessionId) continue
 
             // Check if this UUID matches a known session
             val matchingSession = sessionIds[uuid]
@@ -443,13 +456,21 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
         if (session == null) {
             logger.info("Session $sessionId not yet in index (binding created anyway)")
             scope.launch {
-                kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
-                sessionService.invalidateCache()
-                val found = sessionService.findSessionByIdGlobal(sessionId)
-                if (found != null) {
-                    logger.info("Session $sessionId appeared in index after delay")
-                } else {
-                    logger.debug("Session $sessionId still not in index after delay")
+                try {
+                    kotlinx.coroutines.delay(SESSION_VERIFICATION_DELAY_MS)
+                    // No cache wipe: the per-file mtime check already re-reads a changed
+                    // index, and this loop only logs. Wiping made the EDT's next
+                    // getSessions() re-read every index file from disk.
+                    val found = sessionService.findSessionByIdGlobal(sessionId)
+                    if (found != null) {
+                        logger.info("Session $sessionId appeared in index after delay")
+                    } else {
+                        logger.debug("Session $sessionId still not in index after delay")
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.info("Index re-check for $sessionId failed: ${e.message}")
                 }
             }
         }
@@ -501,6 +522,12 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 if (session == null) {
                     logger.info("Bound session $sessionId found via JSONL file (not in any index)")
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The cwd lookup reads registry and transcript files; an I/O failure
+                // there is a skipped verification, not an IDE error report.
+                logger.warn("Session verification failed for $sessionId in '${tabMonitor.tabName}': ${e.message}")
             } finally {
                 tabMonitor.pendingVerifications.remove(sessionId)
             }

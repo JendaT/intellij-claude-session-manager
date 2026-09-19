@@ -44,6 +44,9 @@ class PluginSettingsConfigurable : Configurable {
 
     // File-backed (~/.claude/settings.json), not a plugin-persisted setting.
     private var disableClaudeTabTitle = titleSettings.isTitleDisabled()
+    // isModified() runs on the EDT after every UI event in the dialog; comparing against
+    // a live read of ~/.claude/settings.json put a file parse behind each keystroke.
+    private var initialDisableClaudeTabTitle = disableClaudeTabTitle
 
     // Integration UI components (need to be refreshed)
     private var statusLabel: JBLabel? = null
@@ -313,7 +316,7 @@ class PluginSettingsConfigurable : Configurable {
                 customClaudeHomePath != (settings.customClaudeHomePath ?: "") ||
                 forceOptionAsMetaKeyOff != settings.forceOptionAsMetaKeyOff ||
                 protectTabNames != settings.protectTabNames ||
-                disableClaudeTabTitle != titleSettings.isTitleDisabled()
+                disableClaudeTabTitle != initialDisableClaudeTabTitle
         }
     }
 
@@ -380,6 +383,7 @@ class PluginSettingsConfigurable : Configurable {
         forceOptionAsMetaKeyOff = settings.forceOptionAsMetaKeyOff
         protectTabNames = settings.protectTabNames
         disableClaudeTabTitle = titleSettings.isTitleDisabled()
+        initialDisableClaudeTabTitle = disableClaudeTabTitle
         panel?.reset()
         refreshIntegrationStatus()
     }

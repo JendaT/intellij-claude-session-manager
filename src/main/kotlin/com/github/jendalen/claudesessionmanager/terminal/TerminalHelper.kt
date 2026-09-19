@@ -6,7 +6,6 @@ import com.github.jendalen.claudesessionmanager.services.SettingsService
 import com.github.jendalen.claudesessionmanager.util.LaunchCommand
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -360,19 +359,6 @@ object TerminalHelper {
     }
 
     /**
-     * Gets the TerminalView from the action event's data context.
-     * This is the official way to get the terminal from context menu actions (reworked terminal).
-     */
-    fun getTerminalViewFromEvent(e: AnActionEvent): TerminalView? {
-        return try {
-            e.getData(TerminalView.DATA_KEY)
-        } catch (ex: Exception) {
-            logger.debug("TerminalView.DATA_KEY not available: ${ex.message}")
-            null
-        }
-    }
-
-    /**
      * Checks if the action is being performed in a terminal context.
      * Works with both terminal engines.
      */
@@ -386,19 +372,6 @@ object TerminalHelper {
         // Check if there's a selected content (a tab)
         val contentManager = toolWindow.contentManager
         return contentManager.selectedContent != null
-    }
-
-    /**
-     * Gets a ShellTerminalWidget from the action event context.
-     * Returns the currently selected terminal tab's widget.
-     *
-     * NOTE: This may return null in the reworked terminal (2025+).
-     * Use getTerminalContext() for a more robust approach.
-     */
-    fun getShellTerminalWidgetFromEvent(e: AnActionEvent): ShellTerminalWidget? {
-        val project = e.project ?: return null
-        val context = getTerminalContext(e)
-        return context?.shellWidget ?: getSelectedShellTerminalWidget(project)
     }
 
     /**
@@ -416,28 +389,6 @@ object TerminalHelper {
             }
         }
         return null
-    }
-
-    /**
-     * Gets the currently selected ShellTerminalWidget.
-     */
-    fun getSelectedShellTerminalWidget(project: Project): ShellTerminalWidget? {
-        val terminalManager = TerminalToolWindowManager.getInstance(project)
-
-        // Get the tool window to find the selected tab
-        val toolWindow = getTerminalToolWindow(project) ?: return null
-        val contentManager = toolWindow.contentManager
-        val selectedContent = contentManager.selectedContent
-
-        if (selectedContent != null) {
-            val widget = findShellWidgetByName(project, selectedContent.displayName ?: "")
-            if (widget != null) return widget
-        }
-
-        // Fallback: return first ShellTerminalWidget
-        return terminalManager.terminalWidgets
-            .filterIsInstance<ShellTerminalWidget>()
-            .firstOrNull()
     }
 
     /**
@@ -499,35 +450,6 @@ object TerminalHelper {
 
         logger.warn("Cannot execute command - no terminal interface available")
         return false
-    }
-
-    /**
-     * Executes a command in the terminal.
-     * Tries TerminalView API first (reworked terminal), falls back to ShellTerminalWidget.
-     */
-    fun executeCommand(e: AnActionEvent, command: String): Boolean {
-        val context = getTerminalContext(e)
-        if (context != null) {
-            return executeCommand(context, command)
-        }
-
-        // Legacy fallback
-        val terminalView = getTerminalViewFromEvent(e)
-        if (terminalView != null) {
-            try {
-                terminalView.createSendTextBuilder()
-                    .shouldExecute()
-                    .send(command)
-                logger.info("Executed command via TerminalView: $command")
-                return true
-            } catch (ex: Exception) {
-                logger.debug("TerminalView.sendText failed: ${ex.message}")
-            }
-        }
-
-        val project = e.project ?: return false
-        val widget = getSelectedShellTerminalWidget(project) ?: return false
-        return executeCommandInWidget(widget, command)
     }
 
     /**
@@ -647,23 +569,6 @@ object TerminalHelper {
             if (executeCommandInWidget(widget, command)) {
                 return true
             }
-        }
-
-        // APPROACH 5: Use TerminalToolWindowManager widgets (classic terminal)
-        try {
-            val terminalManager = TerminalToolWindowManager.getInstance(project)
-            for (termWidget in terminalManager.terminalWidgets) {
-                if (termWidget is ShellTerminalWidget) {
-                    val title = termWidget.terminalTitle.buildTitle()
-                    if (title == context.tabName) {
-                        if (executeCommandInWidget(termWidget, command)) {
-                            return true
-                        }
-                    }
-                }
-            }
-        } catch (ex: Exception) {
-            logger.debug("TerminalToolWindowManager approach failed: ${ex.message}")
         }
 
         logger.warn("All approaches failed to execute command in terminal '${context.tabName}'")

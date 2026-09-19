@@ -86,6 +86,7 @@ class AutoResumeService : ProjectActivity {
             // merely found no live tabs.
             throw e
         } catch (e: Exception) {
+            logger.warn("Could not list live tabs; attached bindings lose their dedup preference: ${e.message}")
             emptySet()
         }
         val bindings = bindingService.getAutoResumeBindings()
@@ -225,6 +226,7 @@ class AutoResumeService : ProjectActivity {
                 stagnantPolls = if (pending >= lastPending) stagnantPolls + 1 else 0
                 if (stagnantPolls >= MAX_STAGNANT_POLLS) {
                     logger.info("$pending binding(s) still unattached after ${waited}ms with no progress - continuing without them")
+                    logUnattached(project, migrationService)
                     return
                 }
                 lastPending = pending
@@ -234,6 +236,30 @@ class AutoResumeService : ProjectActivity {
             waited += TAB_RESTORE_POLL_MS
         }
         logger.info("Tab-restoration wait budget exhausted (${TAB_RESTORE_WAIT_BUDGET_MS}ms)")
+        logUnattached(project, migrationService)
+    }
+
+    /**
+     * The line needed when a tab "lost its session after restart": which bindings the
+     * migration could not re-attach and how many open tabs carry each one's name.
+     * Logged once here, not inside the 500 ms poll.
+     */
+    private suspend fun logUnattached(project: Project, migrationService: BindingMigrationService) {
+        try {
+            val line = withContext(Dispatchers.EDT) {
+                val unattached = migrationService.unattachedBindings()
+                if (unattached.isEmpty()) return@withContext null
+                val names = TerminalHelper.getTerminalToolWindow(project)?.contentManager?.contents
+                    ?.mapNotNull { it.displayName } ?: emptyList()
+                unattached.joinToString(", ") { b ->
+                    val n = b.tabIdentifier.effectiveName
+                    "'$n' (${names.count { it == n }} matching tab(s))"
+                }
+            } ?: return
+            logger.info("Bindings still unattached: $line")
+        } catch (e: Exception) {
+            logger.info("Could not list unattached bindings: ${e.message}")
+        }
     }
 
     /**

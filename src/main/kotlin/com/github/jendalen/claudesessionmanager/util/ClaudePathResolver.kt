@@ -52,7 +52,16 @@ object ClaudePathResolver {
      * Logs a warning if the path appears suspicious.
      */
     private fun validatePath(file: File, source: String): Boolean {
-        val canonicalPath = file.canonicalPath
+        // canonicalPath resolves links and can throw on an unreadable parent or a
+        // dangling link; every caller of getClaudeHome() sits downstream of this, and
+        // the exception used to escape into coroutines and Alarm requests as an IDE
+        // error report. An unresolvable path is rejected like a suspicious one.
+        val canonicalPath = try {
+            file.canonicalPath
+        } catch (e: java.io.IOException) {
+            logger.info("Cannot resolve path in $source (${e.message}); falling back to the default")
+            return false
+        }
         val absolutePath = file.absolutePath
 
         // Path traversal: a `..` component makes the canonical path differ from the
@@ -97,7 +106,7 @@ object ClaudePathResolver {
      */
     fun findAllSessionsIndexFiles(): List<File> {
         val now = System.currentTimeMillis()
-        if (now - cachedIndexFilesTimestamp < INDEX_FILES_CACHE_TTL_MS && cachedIndexFiles.isNotEmpty()) {
+        if (cachedIndexFilesTimestamp != 0L && now - cachedIndexFilesTimestamp < INDEX_FILES_CACHE_TTL_MS) {
             return cachedIndexFiles
         }
 
@@ -124,6 +133,7 @@ object ClaudePathResolver {
      */
     fun invalidateIndexFilesCache() {
         cachedIndexFilesTimestamp = 0
+        cachedProjectDirsTimestamp = 0
     }
 
     /**
@@ -153,7 +163,7 @@ object ClaudePathResolver {
      */
     fun findSessionFile(sessionId: String): File? {
         // Validate UUID format to prevent path traversal
-        if (!SESSION_ID_PATTERN.matches(sessionId)) {
+        if (!SessionIdValidator.isValid(sessionId)) {
             logger.warn("Invalid session ID format for file check: $sessionId")
             return null
         }
@@ -168,8 +178,6 @@ object ClaudePathResolver {
         return projectDirs(refresh = true).firstNotNullOfOrNull { File(it, filename).takeIf(File::exists) }
     }
 
-    private val SESSION_ID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-
     @Volatile
     private var cachedProjectDirs: List<File> = emptyList()
     @Volatile
@@ -177,7 +185,7 @@ object ClaudePathResolver {
 
     private fun projectDirs(refresh: Boolean): List<File> {
         val now = System.currentTimeMillis()
-        if (!refresh && now - cachedProjectDirsTimestamp < INDEX_FILES_CACHE_TTL_MS && cachedProjectDirs.isNotEmpty()) {
+        if (!refresh && cachedProjectDirsTimestamp != 0L && now - cachedProjectDirsTimestamp < INDEX_FILES_CACHE_TTL_MS) {
             return cachedProjectDirs
         }
         val projectsDir = getProjectsDirectory()

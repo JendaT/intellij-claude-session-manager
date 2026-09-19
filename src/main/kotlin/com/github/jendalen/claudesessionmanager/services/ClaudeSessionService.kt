@@ -28,7 +28,11 @@ class ClaudeSessionService(private val project: Project) {
     // Multi-slot cache: keyed by absolute file path, each with its own mtime
     private data class CacheEntry(
         val index: SessionsIndex?,
-        val mtime: Long
+        val mtime: Long,
+        // The project-filtered, sorted view of `index`, built once per file version.
+        // getSessions() runs on the EDT for every UUID-bearing terminal chunk; without
+        // this it re-filtered and re-sorted N entries at the terminal redraw rate.
+        @Volatile var sessions: List<ClaudeSession>? = null
     )
     private val indexCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
 
@@ -59,19 +63,18 @@ class ClaudeSessionService(private val project: Project) {
      */
     fun getSessions(): List<ClaudeSession> {
         val projectPath = getProjectPath() ?: return emptyList()
-        val index = getSessionsIndex() ?: return emptyList()
+        val indexFile = getSessionsIndexFile() ?: return emptyList()
+        val index = readSessionsIndex(indexFile) ?: return emptyList()
+        val entry = indexCache[indexFile.absolutePath]
+        entry?.sessions?.let { return it }
 
-        return index.entries.filter { session ->
+        val sessions = index.entries.filter { session ->
             // Match sessions where projectPath is within IDE's project
             ClaudePathResolver.isPathMatch(projectPath, session.projectPath)
         }.sortedByDescending { it.modifiedInstant() }
+        entry?.sessions = sessions
+        return sessions
     }
-
-    /**
-     * Returns all sessions, including those from subdirectories.
-     * Same as getSessions() but explicitly named for clarity.
-     */
-    fun getAllProjectSessions(): List<ClaudeSession> = getSessions()
 
     /**
      * Finds a session by its ID in the current project's sessions-index.json.
@@ -109,19 +112,6 @@ class ClaudeSessionService(private val project: Project) {
     }
 
     /**
-     * Checks if a session with the given ID exists using multi-tier lookup:
-     * 1. Current project's sessions-index.json (fast)
-     * 2. Global search across all sessions-index.json files
-     * 3. JSONL file existence check (ground truth, independent of index)
-     */
-    fun sessionExists(sessionId: String): Boolean {
-        // findSessionByIdGlobal already checks current project first, then all indexes
-        if (findSessionByIdGlobal(sessionId) != null) return true
-        // Fall back to JSONL file existence (ground truth, independent of any index)
-        return ClaudePathResolver.sessionFileExists(sessionId)
-    }
-
-    /**
      * Forces a reload of the sessions index from disk.
      */
     fun invalidateCache() {
@@ -133,12 +123,13 @@ class ClaudeSessionService(private val project: Project) {
      * Reads a sessions-index.json file with caching.
      */
     private fun readSessionsIndex(file: File): SessionsIndex? {
-        if (!file.exists() || !file.isFile) {
+        // lastModified() is 0 for a missing file - one stat answers "present" and gives
+        // the cache key; isFile only guards the read below.
+        val currentMtime = file.lastModified()
+        if (currentMtime == 0L) {
             logger.debug("Sessions index file not found: ${file.absolutePath}")
             return null
         }
-
-        val currentMtime = file.lastModified()
         val currentPath = file.absolutePath
 
         // Return cached if still valid (per-file cache slot)
@@ -151,6 +142,10 @@ class ClaudeSessionService(private val project: Project) {
         }
 
         return try {
+            if (!file.isFile) {
+                logger.debug("Sessions index path is not a file: ${file.absolutePath}")
+                return null
+            }
             val content = file.readText()
             val index = json.decodeFromString<SessionsIndex>(content)
             indexCache[currentPath] = CacheEntry(index, currentMtime)
@@ -161,23 +156,6 @@ class ClaudeSessionService(private val project: Project) {
             indexCache[currentPath] = CacheEntry(null, currentMtime)
             null
         }
-    }
-
-    /**
-     * Returns sessions from all discovered Claude projects (not just current).
-     * Useful for session picker showing all available sessions.
-     */
-    fun getAllDiscoveredSessions(): Map<String, List<ClaudeSession>> {
-        val result = mutableMapOf<String, List<ClaudeSession>>()
-
-        for (indexFile in ClaudePathResolver.findAllSessionsIndexFiles()) {
-            val index = readSessionsIndex(indexFile)
-            if (index != null && index.entries.isNotEmpty()) {
-                result[index.originalPath] = index.entries.sortedByDescending { it.modifiedInstant() }
-            }
-        }
-
-        return result
     }
 
     companion object {

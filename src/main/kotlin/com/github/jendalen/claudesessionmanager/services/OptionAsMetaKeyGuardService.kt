@@ -73,8 +73,10 @@ class OptionAsMetaKeyGuardService : Disposable {
         ApplicationManager.getApplication().invokeLater { checkAndRevert("session-change") }
         // Cancel any prior delayed rechecks to avoid accumulation, then schedule one
         alarm.cancelAllRequests()
+        periodicPollPending = false
         alarm.addRequest({ checkAndRevert("session-change-recheck") }, RECHECK_DELAY_MS)
-        // Re-schedule periodic poll since cancelAllRequests cleared it
+        // Re-schedule periodic poll since cancelAllRequests cleared it (a poll runnable
+        // executing at this instant re-arms too - the pending flag makes that a no-op)
         schedulePeriodicPoll()
     }
 
@@ -103,8 +105,19 @@ class OptionAsMetaKeyGuardService : Disposable {
         }
     }
 
+    // The periodic poll re-arms itself from inside its own runnable. cancelAllRequests()
+    // in onSessionChangeDetected() cannot cancel a runnable that is already executing, so
+    // that runnable re-armed AND the session-change path re-armed: two chains, each
+    // self-perpetuating for the life of the IDE, one more per resume-storm event that
+    // hit the window. A single pending request is the invariant.
+    @Volatile
+    private var periodicPollPending = false
+
     private fun schedulePeriodicPoll() {
+        if (periodicPollPending) return
+        periodicPollPending = true
         alarm.addRequest({
+            periodicPollPending = false
             if (settingsService.forceOptionAsMetaKeyOff) {
                 val terminalOptions = ApplicationManager.getApplication().getService(TerminalOptionsProvider::class.java)
                 if (terminalOptions.useOptionAsMetaKey) {

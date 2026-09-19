@@ -117,11 +117,12 @@ class SessionHistoryAction : ActionGroup() {
             // Claude CLI handles invalid IDs gracefully with an error in terminal
             bindingService.updateBindingSession(bindingId, historyEntry.sessionId)
 
-            // Resume the session using context
+            // Resume through the stable-tab-id path like every other resume site. The
+            // name-resolved send could land in the first tab sharing this one's title -
+            // duplicates are common once Claude's OSC title renames tabs.
             val context = TerminalHelper.getTerminalContext(e)
             if (context != null) {
-                val command = TerminalHelper.buildResumeCommand(project, historyEntry.sessionId)
-                TerminalHelper.executeCommand(context, command)
+                TerminalHelper.executeCommandInTerminal(project, context, historyEntry.sessionId)
             }
 
             showNotification(

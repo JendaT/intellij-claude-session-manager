@@ -108,7 +108,7 @@ class BindingService(private val project: Project) :
      * Finds a binding by session ID.
      */
     fun findBindingBySessionId(sessionId: String): SessionBinding? {
-        return bindingsCache.values.find { it.currentSessionId == sessionId }
+        return bindingsCache.values.find { it.currentSessionId.equals(sessionId, ignoreCase = true) }
     }
 
     /**

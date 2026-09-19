@@ -68,6 +68,15 @@ class SessionRegistryService {
      */
     fun upsert(sessionId: String, project: String, tab: String?, cwd: String? = null, dir: File = defaultDirectory()) {
         if (!SessionIdValidator.isValid(sessionId)) return
+        // Read-modify-write from pooled threads (a bind confirmation and a rename can
+        // land together for one session); serialize within the process. Cross-process
+        // overlap with the hook script is accepted (F6).
+        synchronized(this) {
+            upsertLocked(sessionId, project, tab, cwd, dir)
+        }
+    }
+
+    private fun upsertLocked(sessionId: String, project: String, tab: String?, cwd: String?, dir: File) {
         try {
             val file = File(dir, "${sessionId.lowercase()}.json")
             val existing = readObject(file)
@@ -210,8 +219,4 @@ class SessionRegistryService {
 
     private fun now(): String = OffsetDateTime.now().truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
-    /** For tests and diagnostics: the `state` field of a session file, or null. */
-    fun stateOf(sessionId: String, dir: File = defaultDirectory()): String? {
-        return readObject(File(dir, "${sessionId.lowercase()}.json"))["state"]?.jsonPrimitive?.content
-    }
 }
