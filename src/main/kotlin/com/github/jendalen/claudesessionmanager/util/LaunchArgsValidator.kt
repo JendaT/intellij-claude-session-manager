@@ -18,6 +18,8 @@ object LaunchArgsValidator {
 
     private val RESERVED_FLAGS = setOf("--resume", "-r", "--continue", "-c", "--session-id")
 
+    private val COMBINED_SHORT_RESERVED = Regex("^-[a-zA-Z]*[rc][a-zA-Z]*$")
+
     /**
      * Returns the normalised value (trimmed, runs of spaces collapsed; empty for blank
      * input) or null when the input is rejected.
@@ -29,7 +31,10 @@ object LaunchArgsValidator {
         if (collapsed.isEmpty()) return ""
         if (!ALLOWED.matches(collapsed)) return null
         val reserved = collapsed.split(' ').any { token ->
-            token in RESERVED_FLAGS || token.substringBefore('=') in RESERVED_FLAGS
+            token in RESERVED_FLAGS || token.substringBefore('=') in RESERVED_FLAGS ||
+                // Combined short flags: `-cd` is `--continue --debug`, `-vr` carries
+                // `--resume`. Anything single-dash containing r or c selects a session.
+                COMBINED_SHORT_RESERVED.matches(token)
         }
         return if (reserved) null else collapsed
     }

@@ -39,6 +39,7 @@ class SessionRegistryService {
 
     companion object {
         const val SWEEP_AGE_MS = 24L * 60 * 60 * 1000
+        private const val MAX_FILE_BYTES = 64 * 1024
 
         fun getInstance(): SessionRegistryService {
             return ApplicationManager.getApplication().getService(SessionRegistryService::class.java)
@@ -180,10 +181,18 @@ class SessionRegistryService {
     private fun readObject(file: File): Map<String, kotlinx.serialization.json.JsonElement> {
         if (!file.isFile) return emptyMap()
         return try {
-            Json.parseToJsonElement(file.readText()).jsonObject
+            // Same trust level as current-session.json, same bounded read: the cap cannot
+            // be raced by the file growing between a length check and the read.
+            val bytes = file.inputStream().use { it.readNBytes(MAX_FILE_BYTES + 1) }
+            if (bytes.size > MAX_FILE_BYTES) {
+                logger.warn("Session registry: ${file.name} exceeds $MAX_FILE_BYTES bytes, treating as unreadable")
+                return emptyMap()
+            }
+            Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
         } catch (e: Exception) {
-            // A torn or foreign file is replaced, not merged - the hook does the same.
-            logger.info("Session registry: ${file.name} is not a JSON object, rewriting")
+            // A torn or foreign file counts as empty: upsert then replaces it (as the
+            // hook does), read() reports nothing, sweep() sees no pid.
+            logger.info("Session registry: ${file.name} is not a JSON object, treating as empty")
             emptyMap()
         }
     }

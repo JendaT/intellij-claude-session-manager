@@ -39,8 +39,15 @@ class UnbindSessionAction : AnAction() {
 
         bindingService.deleteBinding(binding.id)
 
-        // Remove Claude icon and prefix from the tab
-        context.content?.let { TerminalHelper.removeClaudeIconFromContent(it) }
+        // Undo every side effect of binding, not only the icon. The decoration mark and
+        // title protection lived on: a later rebind of the same tab saw "already
+        // decorated" and got neither icon nor badge, while the title listener kept
+        // stripping OSC titles from a tab that no longer had a session.
+        context.content?.let {
+            TerminalHelper.removeClaudeIconFromContent(it)
+            TerminalHelper.unprotectTabTitle(project, it)
+            it.putUserData(TerminalHelper.DECORATED_KEY, null)
+        }
 
         showNotification(project, "Session binding removed", NotificationType.INFORMATION)
         logger.info("Unbound terminal '${tabIdentifier.name}' from session ${binding.currentSessionId}")

@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.util
 
+import com.intellij.notification.Notification
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
@@ -18,13 +19,21 @@ object NotificationHelper {
     const val GROUP_ID = "ClaudeSessionManager"
 
     /**
-     * Shows a notification with title and content.
+     * Builds an escaped notification without showing it, for callers that need to
+     * `addAction` first. The two auto-resume notifications built their own because of
+     * that and bypassed the escaping - an `<img src>` in an OSC-set tab name was fetched
+     * by the notification's editor pane.
      */
-    fun show(project: Project, title: String, content: String, type: NotificationType) {
+    fun create(title: String, content: String, type: NotificationType): Notification =
         NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(StringUtil.escapeXmlEntities(title), StringUtil.escapeXmlEntities(content), type)
-            .notify(project)
+
+    /**
+     * Shows a notification with title and content.
+     */
+    fun show(project: Project, title: String, content: String, type: NotificationType) {
+        create(title, content, type).notify(project)
     }
 
     /**
@@ -37,17 +46,5 @@ object NotificationHelper {
             .notify(project)
     }
 
-    /**
-     * Shows an info notification.
-     */
-    fun info(project: Project, title: String, content: String) {
-        show(project, title, content, NotificationType.INFORMATION)
-    }
 
-    /**
-     * Shows a warning notification.
-     */
-    fun warning(project: Project, title: String, content: String) {
-        show(project, title, content, NotificationType.WARNING)
-    }
 }

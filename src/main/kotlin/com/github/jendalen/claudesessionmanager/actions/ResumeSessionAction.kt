@@ -37,8 +37,16 @@ class ResumeSessionAction : AnAction() {
             return
         }
 
-        // Resume the session - Claude CLI handles invalid IDs gracefully
-        if (!TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)) {
+        // LaunchCommand refuses an id that is not a UUID before anything reaches the
+        // shell; a binding persisted with one is a notification, not an IDE error balloon.
+        val sent = try {
+            TerminalHelper.executeCommandInTerminal(project, context, binding.currentSessionId)
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Resume rejected for tab '${context.tabName}': ${e.message}")
+            showNotification(project, "Cannot resume: the bound session id is malformed", NotificationType.WARNING)
+            return
+        }
+        if (!sent) {
             showNotification(project, "Failed to execute resume command", NotificationType.ERROR)
             return
         }

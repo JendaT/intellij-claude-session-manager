@@ -21,7 +21,11 @@ INPUT=$(cat)
 command -v jq >/dev/null 2>&1 || exit 0
 
 # One jq call extracts every field, shell-quoted so eval is safe.
-eval "$(printf '%s' "$INPUT" | jq -r '@sh "EVENT=\(.hook_event_name // "") SESSION_ID=\(.session_id // "") SOURCE=\(.source // "") CWD=\(.cwd // "") NOTIFICATION=\(.notification_type // "")"' 2>/dev/null)"
+# `| tostring` on every field: @sh quotes a string safely but expands an ARRAY into
+# several quoted words, and under eval the second word becomes a command. No field
+# Claude Code emits is an array today; the cost of being wrong about that is a shell
+# command on every tool call.
+eval "$(printf '%s' "$INPUT" | jq -r '@sh "EVENT=\(.hook_event_name // "" | tostring) SESSION_ID=\(.session_id // "" | tostring) SOURCE=\(.source // "" | tostring) CWD=\(.cwd // "" | tostring) NOTIFICATION=\(.notification_type // "" | tostring)"' 2>/dev/null)"
 
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 [[ "$SESSION_ID" =~ $UUID_RE ]] || exit 0

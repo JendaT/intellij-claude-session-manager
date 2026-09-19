@@ -55,8 +55,10 @@ object ClaudePathResolver {
         val canonicalPath = file.canonicalPath
         val absolutePath = file.absolutePath
 
-        // Check for path traversal attempts
-        if (absolutePath.contains("..") || canonicalPath != absolutePath.replace("//", "/")) {
+        // Path traversal: a `..` component makes the canonical path differ from the
+        // absolute one, so the comparison alone catches it. A substring test on ".."
+        // also rejected legitimate names such as `my..dir`.
+        if (canonicalPath != absolutePath.replace("//", "/")) {
             logger.warn("Rejecting suspicious path in $source: $absolutePath -> $canonicalPath")
             return false
         }
@@ -151,19 +153,39 @@ object ClaudePathResolver {
      */
     fun findSessionFile(sessionId: String): File? {
         // Validate UUID format to prevent path traversal
-        if (!sessionId.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))) {
+        if (!SESSION_ID_PATTERN.matches(sessionId)) {
             logger.warn("Invalid session ID format for file check: $sessionId")
             return null
         }
 
-        val projectsDir = getProjectsDirectory()
-        if (!projectsDir.exists() || !projectsDir.isDirectory) return null
-
         val filename = "$sessionId.jsonl"
-        return projectsDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.map { projectDir -> File(projectDir, filename) }
-            ?.firstOrNull { it.exists() }
+        // Try the cached directory set first; a miss re-lists before giving up, so a
+        // project directory that appeared since the last listing is still found and the
+        // answer is exactly what a fresh listing would give. Only hits avoid the readdir
+        // - which is what the startup fallback walk (28 bindings x history) and the
+        // output channel's per-chunk verification were paying for.
+        projectDirs(refresh = false).firstNotNullOfOrNull { File(it, filename).takeIf(File::exists) }?.let { return it }
+        return projectDirs(refresh = true).firstNotNullOfOrNull { File(it, filename).takeIf(File::exists) }
+    }
+
+    private val SESSION_ID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+    @Volatile
+    private var cachedProjectDirs: List<File> = emptyList()
+    @Volatile
+    private var cachedProjectDirsTimestamp: Long = 0
+
+    private fun projectDirs(refresh: Boolean): List<File> {
+        val now = System.currentTimeMillis()
+        if (!refresh && now - cachedProjectDirsTimestamp < INDEX_FILES_CACHE_TTL_MS && cachedProjectDirs.isNotEmpty()) {
+            return cachedProjectDirs
+        }
+        val projectsDir = getProjectsDirectory()
+        if (!projectsDir.exists() || !projectsDir.isDirectory) return emptyList()
+        val dirs = projectsDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+        cachedProjectDirs = dirs
+        cachedProjectDirsTimestamp = now
+        return dirs
     }
 
     /**

@@ -225,7 +225,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                     }
                 }, tabDisposable)
             } catch (e: Exception) {
-                logger.debug("Could not attach title listener for '$tabName': ${e.message}")
+                logger.warn("Could not attach title listener for '$tabName' - title protection and persistent-name sync are off for this tab: ${e.message}")
             }
 
             // Monitor the active output model via StateFlow. collectLatest replays the
@@ -240,14 +240,20 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                         logger.debug("Active output model changed for tab '$tabName'")
                         registerOutputListener(tabMonitor, activeModel)
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    logger.debug("Output model flow collection ended for '$tabName': ${e.message}")
+                    logger.warn("Output model flow collection ended for '$tabName' - the output channel is off for this tab: ${e.message}")
                 }
             }
 
             logger.info("Started monitoring terminal tab: '$tabName'")
 
         } catch (e: Exception) {
+            // The map entry went in before the listeners were attached; leaving it makes
+            // every later monitorTab() for this tab a silent no-op ("already monitored")
+            // for the life of the project. Drop it so the next tabAdded/start can retry.
+            monitoredTabs.remove(tabId)
             logger.warn("Failed to monitor tab '$tabName': ${e.message}", e)
         }
     }
@@ -309,13 +315,14 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
 
             outputModel.addListener(modelDisposable, object : TerminalOutputModelListener {
                 override fun afterContentChanged(event: TerminalContentChangeEvent) {
+                    // Cheap checks first: newText is a copy from the first changed line to
+                    // the end of the buffer, and this fires tens of times a second on the
+                    // EDT. Type-ahead and trimming events used to pay for that copy and
+                    // then discard it.
+                    if (event.isTypeAhead) return   // user typing preview
+                    if (event.isTrimming) return    // scrollback cleanup
+
                     val newText = event.newText?.toString() ?: return
-
-                    // Skip type-ahead text (user typing preview)
-                    if (event.isTypeAhead) return
-
-                    // Skip trimming events (scrollback cleanup)
-                    if (event.isTrimming) return
 
                     // Never log raw terminal content - it routinely contains secrets and
                     // idea.log ends up attached to bug reports. Length is enough for tracing.
@@ -331,7 +338,7 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
             logger.debug("Registered output listener for tab '$tabName'")
 
         } catch (e: Exception) {
-            logger.debug("Failed to register output listener for '$tabName': ${e.message}")
+            logger.warn("Failed to register output listener for '$tabName' - the output channel is off for this tab: ${e.message}")
         }
     }
 

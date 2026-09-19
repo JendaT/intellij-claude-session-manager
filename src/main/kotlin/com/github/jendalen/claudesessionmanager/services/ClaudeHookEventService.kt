@@ -1,5 +1,6 @@
 package com.github.jendalen.claudesessionmanager.services
 
+import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -327,12 +328,10 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
      * Unlike string prefix matching, this ensures the match is at a directory boundary.
      * e.g., /foo/bar matches /foo/bar/baz but NOT /foo/bar-other
      */
-    private fun isDirectoryMatch(eventCwd: String, projectPath: String): Boolean {
-        val normalizedCwd = eventCwd.trimEnd('/')
-        val normalizedProject = projectPath.trimEnd('/')
-        return normalizedCwd == normalizedProject ||
-               normalizedCwd.startsWith("$normalizedProject/")
-    }
+    // One implementation of the directory-boundary rule, the tested one; a private copy
+    // here had drifted (no backslash handling) and was covered by nothing.
+    private fun isDirectoryMatch(eventCwd: String, projectPath: String): Boolean =
+        ClaudePathResolver.isPathMatch(projectPath, eventCwd)
 
     override fun dispose() {
         stopWatching()

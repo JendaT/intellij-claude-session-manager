@@ -83,12 +83,39 @@ class ClaudeHookManager {
         }
     }
 
+    /**
+     * The command string the installer writes, plus the two spellings a user may have
+     * hand-edited it into. Matched exactly: a `contains(HOOK_SCRIPT_NAME)` test treated
+     * any third-party hook with the same basename as ours - install then skipped adding
+     * the plugin's entry and revert deleted the foreign one.
+     */
+    private val ownedCommands: Set<String> = setOf(
+        "\$HOME/.claude/hooks/$HOOK_SCRIPT_NAME",
+        "~/.claude/hooks/$HOOK_SCRIPT_NAME",
+        "${System.getProperty("user.home")}/.claude/hooks/$HOOK_SCRIPT_NAME"
+    )
+
+    private fun JsonElement.isOurHook(): Boolean =
+        ((this as? JsonObject)?.get("command")?.jsonPrimitive?.contentOrNull ?: "") in ownedCommands
+
     private fun JsonElement.isOurEntry(): Boolean {
         val hooksList = (this as? JsonObject)?.get("hooks")?.jsonArray ?: return false
-        return hooksList.any { hook ->
-            val command = (hook as? JsonObject)?.get("command")?.jsonPrimitive?.contentOrNull ?: ""
-            command.contains(HOOK_SCRIPT_NAME)
-        }
+        return hooksList.any { it.isOurHook() }
+    }
+
+    /**
+     * The entry with our hook removed from its `hooks` array, or null when nothing else
+     * was in it. Another tool's command sharing the same entry survives - dropping the
+     * whole entry took its hook with ours, against the "merge, never overwrite other
+     * keys" promise.
+     */
+    private fun JsonElement.withoutOurHook(): JsonElement? {
+        val obj = this as? JsonObject ?: return this
+        val hooksList = obj["hooks"]?.jsonArray ?: return this
+        val kept = hooksList.filterNot { it.isOurHook() }
+        if (kept.size == hooksList.size) return this
+        if (kept.isEmpty()) return null
+        return JsonObject(obj.toMutableMap().apply { put("hooks", JsonArray(kept)) })
     }
 
     data class IntegrationStatus(
@@ -160,9 +187,23 @@ class ClaudeHookManager {
                 logger.info("Created hooks directory: ${hooksDir.absolutePath}")
             }
 
-            // Write hook script
+            // Write hook script. Never through a symlink: writeText follows one, and a
+            // link planted at this path would redirect a root-of-trust script anywhere.
+            // The mode is set explicitly rather than inherited - setExecutable(true) only
+            // adds the owner bit to whatever an existing file had.
+            if (java.nio.file.Files.isSymbolicLink(hookScript.toPath())) {
+                logger.warn("Refusing to write hook script: ${hookScript.absolutePath} is a symbolic link")
+                return false to "Hook script path is a symbolic link; remove it and install again"
+            }
             hookScript.writeText(hookScriptContent)
-            hookScript.setExecutable(true)
+            try {
+                java.nio.file.Files.setPosixFilePermissions(
+                    hookScript.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x")
+                )
+            } catch (e: UnsupportedOperationException) {
+                hookScript.setExecutable(true)
+            }
             logger.info("Created hook script: ${hookScript.absolutePath}")
 
             // Update settings.json
@@ -290,9 +331,10 @@ class ClaudeHookManager {
             var removed = 0
             for ((event, _) in HOOK_EVENTS) {
                 val entries = hooksObject[event]?.jsonArray ?: continue
-                val filtered = entries.filterNot { it.isOurEntry() }
-                if (filtered.size == entries.size) continue
-                removed += entries.size - filtered.size
+                val owned = entries.count { it.isOurEntry() }
+                if (owned == 0) continue
+                removed += owned
+                val filtered = entries.mapNotNull { it.withoutOurHook() }
                 if (filtered.isEmpty()) hooksObject.remove(event) else hooksObject[event] = JsonArray(filtered)
             }
 

@@ -143,7 +143,10 @@ class ClaudeSessionService(private val project: Project) {
 
         // Return cached if still valid (per-file cache slot)
         val cached = indexCache[currentPath]
-        if (cached != null && cached.mtime == currentMtime && cached.index != null) {
+        if (cached != null && cached.mtime == currentMtime) {
+            // A null index is a remembered parse failure for this mtime: a corrupt file
+            // used to be re-read and re-warned (with a stack trace) on every call, and
+            // the output monitor calls this for every UUID-bearing chunk.
             return cached.index
         }
 
@@ -154,7 +157,8 @@ class ClaudeSessionService(private val project: Project) {
             logger.debug("Loaded sessions index: ${index.entries.size} entries")
             index
         } catch (e: Exception) {
-            logger.warn("Failed to parse ${file.absolutePath}: ${e.message}", e)
+            logger.warn("Failed to parse ${file.absolutePath} (will not retry until it changes): ${e.message}", e)
+            indexCache[currentPath] = CacheEntry(null, currentMtime)
             null
         }
     }

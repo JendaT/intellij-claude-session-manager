@@ -24,6 +24,8 @@ import javax.swing.JComponent
  */
 class PluginSettingsConfigurable : Configurable {
 
+    private val logger = com.intellij.openapi.diagnostic.Logger.getInstance(PluginSettingsConfigurable::class.java)
+
     private var panel: DialogPanel? = null
     private val settingsService = SettingsService.getInstance()
     private val hookManager = ClaudeHookManager.getInstance()
@@ -254,7 +256,11 @@ class PluginSettingsConfigurable : Configurable {
         if (result == Messages.OK) {
             val (success, error) = hookManager.installHooks()
             if (success) {
-                com.github.jendalen.claudesessionmanager.services.SessionRegistryService.getInstance().sweep()
+                // Directory listing plus a read and a ProcessHandle lookup per stale
+                // file - not for the EDT behind a modal dialog.
+                com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                    com.github.jendalen.claudesessionmanager.services.SessionRegistryService.getInstance().sweep()
+                }
                 Messages.showInfoMessage("Hooks installed successfully.", "Success")
             } else {
                 Messages.showErrorDialog("Failed to install hooks: $error", "Error")
@@ -343,7 +349,9 @@ class PluginSettingsConfigurable : Configurable {
                     com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
                         .updateTitleProtectionForBoundTabs(project, protectTabNames)
                 } catch (e: Exception) {
-                    // Non-fatal: protection still applies lazily on the next session event
+                    // Non-fatal: protection still applies lazily on the next session event,
+                    // but the toggle appearing to do nothing must be diagnosable.
+                    logger.warn("Could not update title protection for '${project.name}': ${e.message}")
                 }
             }
         }

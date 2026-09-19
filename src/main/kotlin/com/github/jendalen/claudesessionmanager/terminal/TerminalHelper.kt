@@ -163,7 +163,7 @@ object TerminalHelper {
             val tabsManager = TerminalToolWindowTabsManager.getInstance(project)
             tabsManager.tabs.firstOrNull { it.content === content }?.let { return it.view.title }
         } catch (ex: Exception) {
-            logger.debug("TerminalToolWindowTabsManager not available: ${ex.message}")
+            logger.info("TerminalToolWindowTabsManager not available: ${ex.message}")
         }
         // Classic terminal: find the widget whose built title equals the displayed name
         try {
@@ -173,7 +173,7 @@ object TerminalHelper {
                 .firstOrNull { it.terminalTitle.buildTitle() == content.displayName }
             if (widget != null) return widget.terminalTitle
         } catch (ex: Exception) {
-            logger.debug("TerminalToolWindowManager not available: ${ex.message}")
+            logger.info("TerminalToolWindowManager not available: ${ex.message}")
         }
         return null
     }

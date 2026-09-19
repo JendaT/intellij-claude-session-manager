@@ -62,4 +62,16 @@ class LaunchArgsValidatorTest {
         // Prefix matches are not the reserved flag.
         assertTrue(LaunchArgsValidator.isValid("--resume-something"))
     }
+
+    // `-cd` is `--continue --debug`; a session-selecting letter hidden in a combined short
+    // flag is still session selection. Other short flags and every long flag stay valid.
+    @Test
+    fun `rejects combined short flags that carry r or c`() {
+        for (bad in listOf("-cd", "-dc", "-vr", "-rv", "-pc", "-d -rc")) {
+            assertNull(LaunchArgsValidator.normalize(bad), "should reject: $bad")
+        }
+        for (ok in listOf("-d", "-p", "-v", "-dv", "--channels plugin:test-channel@spike-market", "--debug")) {
+            assertTrue(LaunchArgsValidator.isValid(ok), "should accept: $ok")
+        }
+    }
 }

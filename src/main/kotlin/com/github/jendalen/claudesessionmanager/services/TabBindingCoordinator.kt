@@ -73,7 +73,9 @@ class TabBindingCoordinator(private val project: Project) {
      * session forever).
      */
     fun expectFreshSession(tabUuid: String) {
-        pendingFreshTabs[tabUuid] = System.currentTimeMillis() + PENDING_FRESH_WINDOW_MS
+        val now = System.currentTimeMillis()
+        pendingFreshTabs.entries.removeIf { it.value < now }
+        pendingFreshTabs[tabUuid] = now + PENDING_FRESH_WINDOW_MS
         logger.info("Expecting fresh session in tab $tabUuid within ${PENDING_FRESH_WINDOW_MS}ms")
     }
 
@@ -277,7 +279,13 @@ class TabBindingCoordinator(private val project: Project) {
         }
     }
 
-    private fun applyTabSideEffects(content: Content) {
+    /**
+     * Decorates a bound tab once per IDE session (icon, title protection) and records
+     * that it happened. Internal, not private, because auto-resume decorates tabs it
+     * has just typed into; three sites there called the two helpers directly, never set
+     * the mark, and the first event on every resumed tab re-ran the icon alarms.
+     */
+    internal fun applyTabSideEffects(content: Content) {
         // The output channel re-confirms live bindings every few seconds; re-running the icon
         // alarms and title change on each confirmation is pure waste. The mark lives in
         // Content UserData, so decoration is re-applied once per IDE session.

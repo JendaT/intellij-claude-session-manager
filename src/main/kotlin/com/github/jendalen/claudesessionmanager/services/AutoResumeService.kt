@@ -6,7 +6,6 @@ import com.github.jendalen.claudesessionmanager.terminal.TerminalTabContext
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.intellij.notification.NotificationAction
-import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.EDT
@@ -82,6 +81,10 @@ class AutoResumeService : ProjectActivity {
         val bindingService = BindingService.getInstance(project)
         val liveTabIds = try {
             withContext(Dispatchers.EDT) { TerminalHelper.liveTabIds(project) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // A cancelled activity must not carry on into the resume loop as if it had
+            // merely found no live tabs.
+            throw e
         } catch (e: Exception) {
             emptySet()
         }
@@ -278,8 +281,7 @@ class AutoResumeService : ProjectActivity {
             val success = TerminalHelper.executeCommandInTerminal(project, context, sessionId)
             if (success) {
                 bindingService.markBindingResumed(binding.id)
-                TerminalHelper.setClaudeIconOnContent(content)
-                TerminalHelper.protectTabTitleIfEnabled(project, content)
+                TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
                 logger.info("Auto-resumed session $sessionId in tab '$displayName'")
                 ResumeOutcome.RESUMED to content
             } else {
@@ -461,9 +463,9 @@ class AutoResumeService : ProjectActivity {
             "${missingBindings.size} tabs not found: ${tabNames.take(3).joinToString(", ")}${if (tabNames.size > 3) "..." else ""}"
         }
 
-        val notification = NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification("Claude Sessions", message, NotificationType.WARNING)
+        // Through the escaping choke point: tab names are OSC-settable by anything in
+        // the terminal and the notification renders HTML.
+        val notification = NotificationHelper.create("Claude Sessions", message, NotificationType.WARNING)
 
         // Add "Dismiss" action - removes the bindings
         notification.addAction(NotificationAction.createSimple("Dismiss (remove bindings)") {
@@ -504,9 +506,9 @@ class AutoResumeService : ProjectActivity {
             "${staleBindings.size} sessions no longer exist: ${tabNames.take(3).joinToString(", ")}${if (tabNames.size > 3) "..." else ""}"
         }
 
-        val notification = NotificationGroupManager.getInstance()
-            .getNotificationGroup("ClaudeSessionManager")
-            .createNotification("Claude Sessions", message, NotificationType.WARNING)
+        // Through the escaping choke point: tab names are OSC-settable by anything in
+        // the terminal and the notification renders HTML.
+        val notification = NotificationHelper.create("Claude Sessions", message, NotificationType.WARNING)
 
         notification.addAction(NotificationAction.createSimple("Start new session") {
             ApplicationManager.getApplication().invokeLater {
@@ -562,8 +564,7 @@ class AutoResumeService : ProjectActivity {
                 persistentName = binding.tabIdentifier.persistentName
             )
             if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project))) {
-                TerminalHelper.setClaudeIconOnContent(content)
-                TerminalHelper.protectTabTitleIfEnabled(project, content)
+                TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
                 started++
                 logger.info("Started new Claude session in tab '$displayName' (stale binding ${binding.id})")
             } else {
@@ -621,20 +622,24 @@ class AutoResumeService : ProjectActivity {
                             } else {
                                 val tabId = TerminalHelper.getOrCreateTabId(content)
                                 val terminalView = TerminalHelper.findTerminalViewByTabId(project, tabId)
+                                // The restart-stable name comes from the TerminalTitle, never
+                                // from a display-name snapshot (getPersistentName's rule). The
+                                // tab was just created with tabName, so the fallback is only
+                                // for a title that cannot be resolved at all.
+                                val persistentName = TerminalHelper.getPersistentName(project, content) ?: tabName
                                 val context = TerminalTabContext(
                                     tabName = tabName,
                                     terminalView = terminalView,
                                     shellWidget = widget,
                                     content = content,
                                     tabId = tabId,
-                                    persistentName = tabName
+                                    persistentName = persistentName
                                 )
                                 val success = TerminalHelper.executeCommandInTerminal(project, context, resumableSessionId)
                                 if (success) {
-                                    bindingService.attachTabUuid(binding.id, tabId, tabName)
+                                    bindingService.attachTabUuid(binding.id, tabId, persistentName)
                                     bindingService.markBindingResumed(binding.id)
-                                    TerminalHelper.setClaudeIconOnContent(content)
-                                    TerminalHelper.protectTabTitleIfEnabled(project, content)
+                                    TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
                                     logger.info("Recreated and resumed tab '$tabName'")
                                 }
                             }
