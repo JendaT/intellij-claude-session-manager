@@ -39,6 +39,10 @@
                 profile directory (else the project folder); a SessionStart in a profile's
                 directory binds to that profile's tab. Registry files carry the profile name
                 as tab and the worktree as cwd. Projects without profiles behave as before.</li>
+            <li>Fixed: startup hang while restoring many tabs. Saving the bindings ran a
+                synchronous project save on the UI thread; it is now queued with the
+                platform's saver from a background timer. The title-sync poll no longer waits
+                for the UI thread.</li>
             <li>Limitation: a tab already open when its profile is created keeps running what
                 it ran; close it and open the profile tab.</li>
         </ul>

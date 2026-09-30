@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktree as `cwd` (the hook script is unchanged).
 - Inbound title sync does not rename profile tabs.
 
+### Fixed
+- WebStorm could hang at startup while restoring many tabs: saving the bindings ran
+  `project.save()` on the UI thread (a modal progress under the write lock) and every
+  background worker ended up waiting (observed 2026-09-30, 26 tabs, over two minutes of
+  "Thread pool exhaustion"). The save is now handed to the platform's save queue from a
+  background timer, still debounced by 200 ms. The title-sync poll no longer waits for
+  the UI thread either.
+
 ### Known limitations
 - A tab that is already open when its profile is created keeps running what it ran; the
   plugin says so and never types into an open tab. Close it and open the profile tab.

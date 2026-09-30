@@ -98,7 +98,9 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   to accept a UUID only inside a `claude ... --resume <id>` launch line; H9 the hook
   channel writes any *unowned* session onto the selected tab (registry `pid` comparison
   can refuse); H2 non-indexed ids re-verified every 1.5 s with a global scan; H3
-  `project.save()` on the EDT after every binding mutation; H6 four user actions write
+  `project.save()` on the EDT after every binding mutation (fixed 2026-09-30 in 0.9.0 -
+  it hung WebStorm during a 26-tab restore; now `SaveAndSyncHandler.scheduleProjectSave`
+  from a pooled alarm, guarded by `NoBlockingUiWaitsTest`); H6 four user actions write
   bindings without `TabBindingCoordinator`; H8 index-watch rewrites an existing binding's
   session despite `allowCreate=false`; M16 the registry's two cross-process writers are
   unsynchronised (accepted in F6, revisit if lost updates show up). Full reports were

@@ -100,55 +100,81 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
         }, KICK_DELAY_MS, TimeUnit.MILLISECONDS)
     }
 
+    /**
+     * One poll: bindings on this thread, their open tabs on the UI thread, file reads back
+     * on a pooled thread, each hop by invokeLater / executeOnPooledThread. No thread ever
+     * waits for the UI thread: the first version used invokeAndWait here, and the
+     * 2026-09-30 WebStorm hang caught two poll threads parked in it while the UI thread
+     * sat in a modal save. [pollRunning] is released at the end of whichever hop ends the
+     * poll, so a poll that cannot proceed (modal dialog open) simply delays the next one.
+     */
     private fun pollSafely() {
         if (project.isDisposed) return
         if (!pollRunning.compareAndSet(false, true)) return
+        var handedOff = false
         try {
-            poll()
+            if (TabBindingCoordinator.getInstance(project).isSuppressed()) return
+            val bindings = BindingService.getInstance(project).getAllBindings()
+            if (bindings.isEmpty()) return
+            ApplicationManager.getApplication().invokeLater({ resolveTabs(bindings) }, project.disposed)
+            handedOff = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             logger.warn("Session title poll failed: ${e.message}", e)
         } finally {
-            pollRunning.set(false)
+            if (!handedOff) pollRunning.set(false)
         }
     }
 
-    /** Pooled thread: file reads only. Anything that changes state goes to the EDT. */
-    private fun poll() {
-        if (TabBindingCoordinator.getInstance(project).isSuppressed()) return
-        val bindings = BindingService.getInstance(project).getAllBindings()
-        if (bindings.isEmpty()) return
-
-        val liveContents = HashMap<String, Content>()
-        ApplicationManager.getApplication().invokeAndWait {
-            if (project.isDisposed) return@invokeAndWait
+    /** UI thread: which bindings have an open tab. */
+    private fun resolveTabs(bindings: List<SessionBinding>) {
+        var handedOff = false
+        try {
+            val liveContents = HashMap<String, Content>()
             for (binding in bindings) {
                 val tabUuid = binding.tabIdentifier.tabUuid ?: continue
                 TerminalHelper.findContentByTabId(project, tabUuid)?.let { liveContents[binding.id] = it }
             }
+            if (liveContents.isEmpty()) return
+            ApplicationManager.getApplication().executeOnPooledThread { readTitles(bindings, liveContents) }
+            handedOff = true
+        } catch (e: Exception) {
+            logger.warn("Session title poll failed resolving tabs: ${e.message}", e)
+        } finally {
+            if (!handedOff) pollRunning.set(false)
         }
+    }
 
-        for (binding in bindings) {
-            val content = liveContents[binding.id] ?: continue
-            val sessionId = binding.currentSessionId
-            val sessionFile = ClaudePathResolver.findSessionFile(sessionId)
-            if (sessionFile == null) {
-                if (missingTranscriptLogged.add(sessionId)) {
-                    logger.info("Title sync: no transcript yet for session $sessionId (binding ${binding.id})")
+    /** Pooled thread: file reads only. Anything that changes state goes to the UI thread. */
+    private fun readTitles(bindings: List<SessionBinding>, liveContents: Map<String, Content>) {
+        try {
+            for (binding in bindings) {
+                if (project.isDisposed) return
+                val content = liveContents[binding.id] ?: continue
+                val sessionId = binding.currentSessionId
+                val sessionFile = ClaudePathResolver.findSessionFile(sessionId)
+                if (sessionFile == null) {
+                    if (missingTranscriptLogged.add(sessionId)) {
+                        logger.info("Title sync: no transcript yet for session $sessionId (binding ${binding.id})")
+                    }
+                    continue
                 }
-                continue
-            }
-            val fingerprint = SessionTitleReader.fingerprint(sessionFile)
-            val previous = fingerprints[binding.id]
-            if (previous != null && previous.first == sessionId && previous.second == fingerprint) continue
-            fingerprints[binding.id] = sessionId to fingerprint
+                val fingerprint = SessionTitleReader.fingerprint(sessionFile)
+                val previous = fingerprints[binding.id]
+                if (previous != null && previous.first == sessionId && previous.second == fingerprint) continue
+                fingerprints[binding.id] = sessionId to fingerprint
 
-            val title = SessionTitleReader.read(sessionFile)
-            if ((title ?: "") == binding.sessionTitle) continue
-            ApplicationManager.getApplication().invokeLater {
-                applyInbound(binding.id, sessionId, content, title)
+                val title = SessionTitleReader.read(sessionFile)
+                if ((title ?: "") == binding.sessionTitle) continue
+                ApplicationManager.getApplication().invokeLater({
+                    applyInbound(binding.id, sessionId, content, title)
+                }, project.disposed)
             }
+        } catch (e: Exception) {
+            logger.warn("Session title poll failed reading titles: ${e.message}", e)
+        } finally {
+            pollRunning.set(false)
         }
     }
 

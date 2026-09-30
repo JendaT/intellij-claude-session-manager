@@ -4,6 +4,7 @@ import com.github.jendalen.claudesessionmanager.model.SessionBinding
 import com.github.jendalen.claudesessionmanager.model.SessionHistoryEntry
 import com.github.jendalen.claudesessionmanager.model.TabIdentifier
 import com.github.jendalen.claudesessionmanager.util.SessionIdValidator
+import com.intellij.ide.SaveAndSyncHandler
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.util.Alarm
@@ -32,7 +33,8 @@ class BindingService(private val project: Project) :
     PersistentStateComponent<BindingService.BindingsState>, com.intellij.openapi.Disposable {
 
     private val logger = Logger.getInstance(BindingService::class.java)
-    private val saveAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
+    // Pooled, not SWING_THREAD: the request only enqueues a save (see syncToState).
+    private val saveAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
 
     /**
      * Serializable state for XML persistence.
@@ -335,10 +337,20 @@ class BindingService(private val project: Project) :
     private fun syncToState() {
         state.bindings = bindingsCache.values.map { bindingToEntry(it) }.toMutableList()
         // Debounced flush to disk to prevent binding loss on IDE crash
-        // without causing N saves during multi-tab auto-resume
+        // without causing N saves during multi-tab auto-resume.
+        //
+        // Never project.save() here. Called on the UI thread it runs the save under a
+        // modal progress while holding the write-intent lock; background workers that
+        // need the lock park, and when every Dispatchers.Default worker is parked the save
+        // itself cannot finish. WebStorm hung this way on 2026-09-30 at 17:03, restoring
+        // 26 tabs in 5 projects ("Thread pool exhaustion: Dispatchers.Default is not
+        // responding" for 2+ minutes, the UI thread in ProjectImpl.save from this alarm).
+        // scheduleProjectSave only enqueues the project with the platform's own save
+        // queue and returns; the platform writes the workspace file shortly after, in the
+        // background, without a modal dialog.
         saveAlarm.cancelAllRequests()
         saveAlarm.addRequest({
-            if (!project.isDisposed) project.save()
+            if (!project.isDisposed) SaveAndSyncHandler.getInstance().scheduleProjectSave(project)
         }, SAVE_DEBOUNCE_MS)
     }
 
