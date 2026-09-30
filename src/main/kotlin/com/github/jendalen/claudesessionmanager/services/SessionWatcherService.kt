@@ -293,6 +293,17 @@ class SessionWatcherService(private val project: Project) : Disposable {
 
                 val selectedContent = toolWindow.contentManager.selectedContent ?: return@invokeLater
 
+                // The index lists the project folder's sessions; a profile tab (a worktree
+                // proxy) must not pick one up because it happens to be selected.
+                val root = TabProfileService.getInstance(project).rootFor(selectedContent)
+                if (session.projectPath.isNotBlank() && root != null &&
+                    !com.github.jendalen.claudesessionmanager.util.TabProfiles.isUnder(root, session.projectPath)
+                ) {
+                    logger.info("Index-watch bind skipped: session ${session.sessionId} runs in '${session.projectPath}', " +
+                        "the selected tab '${selectedContent.displayName}' belongs to '$root'")
+                    return@invokeLater
+                }
+
                 TabBindingCoordinator.getInstance(project).bindOrUpdate(
                     content = selectedContent,
                     sessionId = session.sessionId,

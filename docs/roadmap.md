@@ -41,6 +41,14 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   checklist at the end of the plan (both IDEs) - in particular whether the reworked
   terminal's `sendText` delivers a bare CR to Claude's prompt box.
 
+- [~] **Tab profiles** (2026-09-30): hand-off `docs/handoffs/2026-09-30-tab-profiles.md`,
+  spec `docs/specs/2026-09-30-tab-profiles-amendment.md`, plan
+  `docs/plans/2026-09-30-tab-profiles-plan.md`. Code complete as v0.9.0 on
+  `feature/tab-profiles` (stacked on the 0.8.0 branch): named tabs that run Claude in a
+  worktree outside the project folder with their own arguments, per-tab cwd root for
+  every channel, attribution by cwd, resume-only-what-ran-there, keep-open at project
+  open. Awaiting the Acme live check (plan), which also covers 0.8.0.
+
 ## Backlog
 
 - [ ] v0.6.6 GitHub release - cut once the reuse-existing decoration fix is confirmed
@@ -54,6 +62,8 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   registry service (read, sweep liveness), transcript cwd reader, path matching, and the
   hook script itself (run under bash + jq).
 - [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` once the v2 hook is live.
+- [ ] Session picker ("Bind to Session...") on a profile tab lists the project folder's
+  sessions; list the profile directory's instead.
 - [ ] Orphaned bindings whose tabs were closed weeks ago survive every restart (4 of 23
   in the 2026-08-05 audit) until dismissed via the missing-tabs notification. Consider
   auto-expiry driven by `orphanedHistoryRetentionDays`.

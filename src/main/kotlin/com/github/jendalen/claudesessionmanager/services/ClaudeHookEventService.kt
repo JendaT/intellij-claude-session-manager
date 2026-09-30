@@ -1,6 +1,7 @@
 package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
+import com.github.jendalen.claudesessionmanager.util.TabProfiles
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -221,14 +222,17 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
 
             logger.info("Processing session event: sessionId=${event.sessionId}, source=${event.source}, cwd=${event.cwd}")
 
-            // Check if this event is for our project (directory-boundary-aware)
+            // Check if this event is for our project (directory-boundary-aware). The
+            // project's directories are its folder plus every tab profile's directory -
+            // a profile tab runs Claude in a worktree outside the project folder, and
+            // this check alone used to drop every one of its events.
             val projectPath = project.basePath
             val cwdMatchesProject = projectPath == null ||
                                     event.cwd.isEmpty() ||
-                                    isDirectoryMatch(event.cwd, projectPath)
+                                    TabProfileService.getInstance(project).isUnderAnyRoot(event.cwd)
 
             if (!cwdMatchesProject) {
-                logger.info("Hook event skipped: CWD '${event.cwd}' doesn't match project '$projectPath' (project=${project.name}, session=${event.sessionId}, source=${event.source})")
+                logger.info("Hook event skipped: CWD '${event.cwd}' doesn't match project '$projectPath' or a tab profile (project=${project.name}, session=${event.sessionId}, source=${event.source})")
                 return
             }
 
@@ -266,8 +270,16 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         // coroutine below invalidates and rescans for the cache-miss case.
         val session = sessionService.findSessionByIdGlobal(event.sessionId)
 
-        // Bind immediately - the hook event is authoritative, no index verification needed
-        bindToFocusedTerminal(event.sessionId, session, event.source, event.cwd)
+        // Bind immediately - the hook event is authoritative, no index verification needed.
+        // The hint (a profile whose directory holds the cwd) reads registry files, so it is
+        // prepared here on the watcher thread, not on the EDT.
+        val hint = try {
+            TabProfileService.getInstance(project).attributionHint(event.cwd)
+        } catch (e: Exception) {
+            logger.info("Profile attribution skipped for ${event.sessionId}: ${e.message}")
+            null
+        }
+        bindToFocusedTerminal(event.sessionId, session, event.source, event.cwd, hint)
 
         // If session wasn't in index, schedule background retries to log when it appears
         if (session == null) {
@@ -301,7 +313,8 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
         sessionId: String,
         session: com.github.jendalen.claudesessionmanager.model.ClaudeSession?,
         source: String,
-        cwd: String = ""
+        cwd: String = "",
+        hint: TabProfileService.AttributionHint? = null
     ) {
         ApplicationManager.getApplication().invokeLater {
             try {
@@ -316,9 +329,27 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
                 // could be focused), but selectedContent is still valid from the user's
                 // last interaction with the terminal tab.
 
-                val selectedContent = toolWindow.contentManager.selectedContent
+                // A session whose cwd names a tab profile goes to that profile's tab (see
+                // TabProfileService.profileTabFor); everything else to the selected tab.
+                val profileTab = hint?.let { TabProfileService.getInstance(project).profileTabFor(it, sessionId) }
+                if (profileTab != null && profileTab !== toolWindow.contentManager.selectedContent) {
+                    logger.info("Hook event for $sessionId attributed to profile tab '${hint?.profile?.name}' by its cwd '$cwd'")
+                }
+                val selectedContent = profileTab ?: toolWindow.contentManager.selectedContent
                 if (selectedContent == null) {
                     logger.info("Auto-bind skipped: No terminal tab selected (project=${project.name}, session=$sessionId, source=$source)")
+                    return@invokeLater
+                }
+
+                // The event is attributed to the selected tab, so it must at least be
+                // able to run there: a worktree session belongs to that worktree's
+                // profile tab, a main-clone session to a tab without a profile. Without
+                // profiles the root is the project folder, which the event already
+                // passed above.
+                val root = TabProfileService.getInstance(project).rootFor(selectedContent)
+                if (cwd.isNotBlank() && root != null && !TabProfiles.isUnder(root, cwd)) {
+                    logger.info("Auto-bind skipped: session $sessionId runs in '$cwd', but the selected tab " +
+                        "'${selectedContent.displayName}' belongs to '$root' (source=$source)")
                     return@invokeLater
                 }
 
@@ -358,8 +389,6 @@ class ClaudeHookEventService(private val project: Project) : Disposable {
      */
     // One implementation of the directory-boundary rule, the tested one; a private copy
     // here had drifted (no backslash handling) and was covered by nothing.
-    private fun isDirectoryMatch(eventCwd: String, projectPath: String): Boolean =
-        ClaudePathResolver.isPathMatch(projectPath, eventCwd)
 
     override fun dispose() {
         stopWatching()

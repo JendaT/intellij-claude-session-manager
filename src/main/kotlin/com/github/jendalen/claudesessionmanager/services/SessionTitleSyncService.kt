@@ -192,6 +192,13 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
     private fun renameTabToTitle(bindingId: String, content: Content, title: String): Boolean {
         val persistentName = TerminalHelper.getPersistentName(project, content)
         if (persistentName == title) return true
+        // A profile tab's name is its configuration: renaming it would end the profile
+        // (a renamed tab is no longer a profile tab), silently, on a /rename typed into
+        // the session. The title is still recorded and published to the registry.
+        if (ProjectSettingsService.getInstance(project).profileFor(persistentName) != null) {
+            logger.info("Title sync: not renaming profile tab '$persistentName' to '$title'")
+            return false
+        }
         val clash = BindingService.getInstance(project).getAllBindings().any {
             it.id != bindingId && it.tabIdentifier.persistentName == title
         }

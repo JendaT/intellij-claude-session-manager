@@ -25,6 +25,23 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.9.0</h3>
+        <ul>
+            <li>New: tab profiles (Launch Profile page, per project). A terminal tab named as a
+                profile starts Claude in the profile's working directory - for example a git
+                worktree outside the project folder - with the profile's launch arguments:
+                cd '&lt;dir&gt;' &amp;&amp; claude &lt;arguments&gt; [--resume &lt;id&gt;]. Other tabs are
+                unchanged.</li>
+            <li>New: "Open Profile Tabs" (Tools menu, terminal tab menu), "Open Profile Tab"
+                submenu, and "Claude: &lt;profile&gt;" entries in the terminal's new-tab dropdown.
+                "Keep open" profile tabs are reopened at project open.</li>
+            <li>Changed: detection channels check a session's directory against the tab's
+                profile directory (else the project folder); a SessionStart in a profile's
+                directory binds to that profile's tab. Registry files carry the profile name
+                as tab and the worktree as cwd. Projects without profiles behave as before.</li>
+            <li>Limitation: a tab already open when its profile is created keeps running what
+                it ran; close it and open the profile tab.</li>
+        </ul>
         <h3>0.8.0</h3>
         <ul>
             <li>New: session title sync in both directions. /rename (or --name) in a session
@@ -316,6 +333,21 @@
                    class="com.github.jendalen.claudesessionmanager.actions.SessionHistoryAction"
                    text="Session History"
                    description="Previous sessions for this tab"
+                   popup="true"/>
+
+            <separator/>
+
+            <action id="ClaudeSessionManager.OpenProfileTabs"
+                    class="com.github.jendalen.claudesessionmanager.actions.OpenProfileTabsAction"
+                    text="Open Profile Tabs"
+                    description="Open every tab profile of this project that has no open tab">
+                <add-to-group group-id="ToolsMenu" anchor="last"/>
+            </action>
+
+            <group id="ClaudeSessionManager.OpenProfileTab"
+                   class="com.github.jendalen.claudesessionmanager.actions.OpenProfileTabGroup"
+                   text="Open Profile Tab"
+                   description="Open one tab profile of this project"
                    popup="true"/>
 
             <separator/>

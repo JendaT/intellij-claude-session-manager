@@ -1,6 +1,6 @@
 package com.github.jendalen.claudesessionmanager.services
 
-import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
+import com.github.jendalen.claudesessionmanager.util.TabProfiles
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectCloseListener
@@ -21,6 +21,7 @@ class RegistryProjectCloseListener : ProjectCloseListener {
             if (sessionIds.isEmpty()) return
             val registry = SessionRegistryService.getInstance()
             val basePath = project.basePath
+            val profiles = ProjectSettingsService.getInstance(project).tabProfiles
             var removed = 0
             var kept = 0
             for (id in sessionIds) {
@@ -32,8 +33,9 @@ class RegistryProjectCloseListener : ProjectCloseListener {
                 // process is alive somewhere else.
                 val entry = registry.read(id) ?: continue
                 val ownedElsewhere = entry.project != null && entry.project != project.name
+                // "Here" is the project folder or one of its tab profiles' directories.
                 val liveElsewhere = entry.isLive() && entry.cwd != null && basePath != null &&
-                    !ClaudePathResolver.isPathMatch(basePath, entry.cwd)
+                    !TabProfiles.isUnderAnyRoot(basePath, profiles, entry.cwd)
                 if (ownedElsewhere || liveElsewhere) {
                     kept++
                     logger.info("Session registry: keeping $id on close of '${project.name}' - " +

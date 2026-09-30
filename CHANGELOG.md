@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-30
+
+### Added
+- Tab profiles (Settings > Tools > Claude Session Manager > Launch Profile, per project):
+  a terminal tab named exactly as a profile starts Claude in the profile's working
+  directory - for example a git worktree outside the project folder - with the profile's
+  launch arguments (blank: the project default):
+  `cd '<dir>' && claude <arguments> [--resume <id>]`. Other tabs are unchanged.
+- "Open Profile Tabs" (Tools menu and terminal tab menu), an "Open Profile Tab" submenu,
+  and "Claude: <profile>" entries in the terminal's new-tab dropdown. A new profile tab
+  resumes the last session of that tab name when it ran in the profile's directory,
+  otherwise starts a new session there.
+- "Keep open" profile tabs are reopened at project open (with auto-resume on).
+- The page warns when a profile's directory is missing or not inside a git work tree and
+  refuses duplicate tab names. Renaming a profile tab makes it an ordinary tab.
+
+### Changed
+- Every detection channel checks a session's working directory against the tab it would
+  bind to: the profile directory for a profile tab, the project folder otherwise. A
+  SessionStart whose directory belongs to exactly one profile is bound to that profile's
+  tab rather than the selected tab. Projects without profiles behave as before.
+- Registry files of profile-tab sessions carry the profile name as `tab` and the
+  worktree as `cwd` (the hook script is unchanged).
+- Inbound title sync does not rename profile tabs.
+
+### Known limitations
+- A tab that is already open when its profile is created keeps running what it ran; the
+  plugin says so and never types into an open tab. Close it and open the profile tab.
+- "Bind to Session..." on a profile tab lists the project folder's sessions.
+
 ## [0.8.0] - 2026-09-19
 
 ### Added

@@ -2,6 +2,7 @@ package com.github.jendalen.claudesessionmanager.services
 
 import com.github.jendalen.claudesessionmanager.terminal.TerminalHelper
 import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
+import com.github.jendalen.claudesessionmanager.util.TabProfiles
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -513,10 +514,14 @@ class TerminalOutputMonitorService(private val project: Project) : Disposable {
                 // it must be at least as strict. Without a cwd there is nothing to check
                 // against, and a session this channel cannot place is not bound by it.
                 val cwd = resolveSessionCwd(sessionId, session, sessionFile)
-                val projectPath = project.basePath
-                if (cwd == null || projectPath == null || !ClaudePathResolver.isPathMatch(projectPath, cwd)) {
+                // Under this tab's root: its tab profile's directory, else the project
+                // folder (so with no profiles, exactly the old project check).
+                val profile = TabProfileService.getInstance(project)
+                    .profileFor(TerminalHelper.persistentNameOf(tabMonitor.tab.view.title))
+                val root = TabProfiles.rootFor(project.basePath, profile)
+                if (cwd == null || root == null || !TabProfiles.isUnder(root, cwd)) {
                     logger.info("Output-channel bind skipped: session $sessionId runs in '${cwd ?: "unknown cwd"}', " +
-                        "not under project '$projectPath' (tab='${tabMonitor.tabName}')")
+                        "not under '$root' (tab='${tabMonitor.tabName}'${profile?.let { ", profile" } ?: ""})")
                     return@launch
                 }
 

@@ -4,7 +4,6 @@ import com.intellij.openapi.diagnostic.Logger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.RandomAccessFile
 
 /**
  * Reads the title a Claude session was given with `/rename` or `--name`.
@@ -28,7 +27,7 @@ object SessionTitleReader {
      * record every ~2 KB, so a 256 KiB window is plenty unless a single tool result
      * line is larger than that - the sidecar covers the rest.
      */
-    const val TAIL_BYTES = 256L * 1024
+    const val TAIL_BYTES = TranscriptTail.DEFAULT_BYTES
 
     private const val RECORD_MARKER = "\"type\":\"custom-title\""
 
@@ -65,14 +64,7 @@ object SessionTitleReader {
     private fun readFromTail(sessionFile: File): String? {
         if (!sessionFile.isFile) return null
         return try {
-            val (start, tail) = readTail(sessionFile) ?: return null
-            var lines = tail.split('\n')
-            // A window that does not start at byte 0 begins mid-line; the last element is
-            // whatever Claude is still writing. Neither is a complete record. (Byte
-            // offset, not decoded length: non-ASCII text makes them differ.)
-            if (start > 0L) lines = lines.drop(1)
-            lines = lines.dropLast(1)
-            for (line in lines.asReversed()) {
+            for (line in TranscriptTail.completeLines(sessionFile, TAIL_BYTES).asReversed()) {
                 if (!line.contains(RECORD_MARKER)) continue
                 val record = try {
                     json.decodeFromString(TitleRecord.serializer(), line)
@@ -85,19 +77,6 @@ object SessionTitleReader {
         } catch (e: Exception) {
             logger.info("Could not read the title from ${sessionFile.name}: ${e.message}")
             null
-        }
-    }
-
-    /** The last [TAIL_BYTES] of the file as (start byte offset, decoded text). */
-    private fun readTail(file: File): Pair<Long, String>? {
-        RandomAccessFile(file, "r").use { raf ->
-            val length = raf.length()
-            if (length == 0L) return null
-            val start = maxOf(0L, length - TAIL_BYTES)
-            raf.seek(start)
-            val bytes = ByteArray((length - start).toInt())
-            raf.readFully(bytes)
-            return start to String(bytes, Charsets.UTF_8)
         }
     }
 

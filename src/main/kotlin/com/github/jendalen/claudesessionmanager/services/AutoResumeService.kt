@@ -50,7 +50,7 @@ class AutoResumeService : ProjectActivity {
         private const val SHELL_START_PASSES = 2
     }
 
-    private enum class ResumeOutcome { RESUMED, MISSING, FAILED }
+    private enum class ResumeOutcome { RESUMED, STARTED_FRESH, MISSING, FAILED }
 
     override suspend fun execute(project: Project) {
         val settings = SettingsService.getInstance()
@@ -116,6 +116,8 @@ class AutoResumeService : ProjectActivity {
         var failedCount = 0
         var runningElsewhereCount = 0
         val handledSessionIds = mutableSetOf<String>()
+        val profileService = TabProfileService.getInstance(project)
+        val freshProfileTabs = mutableListOf<String>()
 
         // Resume each binding
         for (binding in bindings) {
@@ -164,10 +166,19 @@ class AutoResumeService : ProjectActivity {
                 runningElsewhereCount++
                 continue
             }
-            val (outcome, content) = resumeBinding(project, binding, bindingService, resumableSessionId)
+            // A profile tab resumes only a session that last ran in its directory; one that
+            // ran elsewhere (the tab existed before its profile did) would carry the other
+            // directory's absolute paths into the worktree. It gets a new session there.
+            val profile = profileService.profileFor(binding.tabIdentifier.effectiveName)
+            val startFresh = profile != null && !profileService.sessionBelongsTo(profile, resumableSessionId)
+            val (outcome, content) = resumeBinding(project, binding, bindingService, resumableSessionId, startFresh)
             when (outcome) {
                 ResumeOutcome.RESUMED -> {
                     resumedCount++
+                    content?.let { resumedContents.add(it) }
+                }
+                ResumeOutcome.STARTED_FRESH -> {
+                    freshProfileTabs.add(binding.tabIdentifier.effectiveName)
                     content?.let { resumedContents.add(it) }
                 }
                 ResumeOutcome.MISSING -> missingBindings.add(binding)
@@ -181,9 +192,32 @@ class AutoResumeService : ProjectActivity {
         // The resume commands are only queued for tabs whose shell has not started.
         failedCount += startShellsForRestoredTabs(project, resumedContents)
 
+        // Profile tabs marked "keep open" that the IDE did not restore. They are opened
+        // (and resume their binding's session) by the profile service, so their bindings
+        // are not reported as missing or stale below.
+        val keptNames = profileService.profiles().filter { it.keepOpen }.map { it.name }.toSet()
+        if (keptNames.isNotEmpty()) {
+            val openNames = withContext(Dispatchers.EDT) {
+                TerminalHelper.persistentNamesSnapshot(project).values.filterNotNull().toSet()
+            }
+            missingBindings.removeAll { it.tabIdentifier.effectiveName in keptNames }
+            staleBindings.removeAll { it.tabIdentifier.effectiveName in keptNames && it.tabIdentifier.effectiveName !in openNames }
+            withContext(Dispatchers.EDT) { profileService.openKeptTabs() }
+        }
+
         // Show notifications
         if (resumedCount > 0) {
             showSuccessNotification(project, resumedCount)
+        }
+
+        if (freshProfileTabs.isNotEmpty()) {
+            NotificationHelper.show(
+                project,
+                "Claude Sessions",
+                "New session started in profile tab${if (freshProfileTabs.size > 1) "s" else ""} " +
+                    "${freshProfileTabs.joinToString(", ") { "'$it'" }}: the previous session ran outside the profile's directory",
+                NotificationType.INFORMATION
+            )
         }
 
         if (missingBindings.isNotEmpty()) {
@@ -288,7 +322,8 @@ class AutoResumeService : ProjectActivity {
         project: Project,
         binding: SessionBinding,
         bindingService: BindingService,
-        sessionId: String = binding.currentSessionId
+        sessionId: String = binding.currentSessionId,
+        startFresh: Boolean = false
     ): Pair<ResumeOutcome, Content?> = withContext(Dispatchers.EDT) {
         val targetName = binding.tabIdentifier.effectiveName
         try {
@@ -311,6 +346,22 @@ class AutoResumeService : ProjectActivity {
                 tabId = tabId,
                 persistentName = binding.tabIdentifier.persistentName
             )
+
+            if (startFresh) {
+                val coordinator = TabBindingCoordinator.getInstance(project)
+                // Through the suppression window: the new session's first event must be
+                // allowed to update this tab's binding (the old session stays in history).
+                tabId?.let { coordinator.expectFreshSession(it) }
+                val command = TerminalHelper.buildStartCommand(project, TerminalHelper.persistentNameOf(project, context))
+                return@withContext if (TerminalHelper.executeCommand(context, command)) {
+                    coordinator.applyTabSideEffects(content)
+                    logger.info("Started a new session in profile tab '$displayName' instead of resuming $sessionId")
+                    ResumeOutcome.STARTED_FRESH to content
+                } else {
+                    logger.warn("Failed to start a new session in profile tab '$displayName'")
+                    ResumeOutcome.FAILED to content
+                }
+            }
 
             val pendingName = pendingTitlePushFor(binding, sessionId)
             val success = TerminalHelper.executeCommandInTerminal(project, context, sessionId, pendingName)
@@ -626,7 +677,7 @@ class AutoResumeService : ProjectActivity {
                 tabId = tabId,
                 persistentName = binding.tabIdentifier.persistentName
             )
-            if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project))) {
+            if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project, TerminalHelper.persistentNameOf(project, context)))) {
                 TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
                 started++
                 logger.info("Started new Claude session in tab '$displayName' (stale binding ${binding.id})")
@@ -642,8 +693,16 @@ class AutoResumeService : ProjectActivity {
     private fun recreateMissingTabs(project: Project, missingBindings: List<SessionBinding>) {
         var createdCount = 0
 
+        val profileService = TabProfileService.getInstance(project)
         for (binding in missingBindings) {
             val tabName = binding.tabIdentifier.effectiveName
+            // A profile tab is recreated in its directory, with its arguments and the
+            // same resume-or-fresh decision the "Open Profile Tab" action makes.
+            profileService.profileFor(tabName)?.let { profile ->
+                profileService.openProfileTab(profile, activate = false)
+                createdCount++
+                continue
+            }
             // Same fallback as the resume loop: the current id may be an unpersisted fork.
             val resumableSessionId = resolveResumableSessionId(binding)
             if (resumableSessionId == null) {

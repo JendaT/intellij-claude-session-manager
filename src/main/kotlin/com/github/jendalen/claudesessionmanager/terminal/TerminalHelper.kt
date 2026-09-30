@@ -542,25 +542,50 @@ object TerminalHelper {
     }
 
     /**
-     * Builds `claude [extraArgs] --resume <id> [--name '<name>']` for [project]. Every path
-     * that types a resume into a terminal goes through here so the launch profile is
+     * Arguments and directory for a launch in the tab whose persistent name is
+     * [persistentName]: a tab profile's own (blank arguments fall back to the project
+     * default), else the project default with no directory change - exactly what every
+     * tab got before tab profiles existed.
+     */
+    private fun launchSpecFor(project: Project, persistentName: String?): Pair<String, String?> {
+        val profile = ProjectSettingsService.getInstance(project).profileFor(persistentName)
+            ?: return getExtraLaunchArgs(project) to null
+        val args = profile.launchArgs.ifBlank { getExtraLaunchArgs(project) }
+        return args to profile.workingDirectory
+    }
+
+    /**
+     * Builds `[cd '<dir>' &&] claude [extraArgs] --resume <id> [--name '<name>']`. Every
+     * path that types a resume into a terminal goes through here so the launch profile is
      * never skipped - a flag like a development channel is per project and must apply to
      * auto-resume, context-menu resume, history restore and new-tab creation alike.
-     * [name] is a pending tab-name push (auto-resume only).
+     * [persistentName] selects a tab profile (its directory and arguments); [name] is a
+     * pending tab-name push (auto-resume only).
      *
      * @throws IllegalArgumentException if sessionId is not a valid UUID or the name
      *         cannot be quoted
      */
-    fun buildResumeCommand(project: Project, sessionId: String, name: String? = null): String {
-        return LaunchCommand.resume(getClaudeCommand(), getExtraLaunchArgs(project), sessionId, name)
+    fun buildResumeCommand(project: Project, sessionId: String, name: String? = null, persistentName: String? = null): String {
+        val (args, directory) = launchSpecFor(project, persistentName)
+        return LaunchCommand.resume(getClaudeCommand(), args, sessionId, name, directory)
     }
 
     /**
-     * Builds `claude [extraArgs]` - a fresh session in [project].
+     * Builds `[cd '<dir>' &&] claude [extraArgs]` - a fresh session, in the tab profile's
+     * directory when [persistentName] names one.
      */
-    fun buildStartCommand(project: Project): String {
-        return LaunchCommand.start(getClaudeCommand(), getExtraLaunchArgs(project))
+    fun buildStartCommand(project: Project, persistentName: String? = null): String {
+        val (args, directory) = launchSpecFor(project, persistentName)
+        return LaunchCommand.start(getClaudeCommand(), args, directory)
     }
+
+    /**
+     * The persistent name of the tab a context refers to: read from the live tab when it
+     * can be (a binding's stored name lags a rename by one listener event), else the
+     * context's snapshot.
+     */
+    fun persistentNameOf(project: Project, context: TerminalTabContext): String? =
+        context.content?.let { getPersistentName(project, it) } ?: context.persistentName
 
     /**
      * Resumes a Claude session in the given terminal.
@@ -580,7 +605,7 @@ object TerminalHelper {
         sessionId: String,
         name: String? = null
     ): Boolean {
-        val command = buildResumeCommand(project, sessionId, name)
+        val command = buildResumeCommand(project, sessionId, name, persistentNameOf(project, context))
 
         // APPROACH 1 (BEST): Match by stable tab id, falling back to name. Matching by name
         // alone is unreliable now that Claude Code renames every tab to "Claude Code".
@@ -651,6 +676,44 @@ object TerminalHelper {
             it.terminalTitle.buildTitle() == name
         }
     }
+
+    /**
+     * Opens a reworked-terminal tab whose shell starts in [workingDirectory], named
+     * [name] as a user-defined title - the terminal persists that as the tab's name and
+     * restores it (the builder's tabName alone is a default title, which a rename in the
+     * IDE would not keep and the persistent-name rules treat differently). The shell is
+     * started without waiting for the tab to be shown: profile tabs are opened in the
+     * background at project open, and a restored tab that waits for display is exactly
+     * what 0.7.0 had to work around. EDT only.
+     */
+    @com.intellij.util.concurrency.annotations.RequiresEdt
+    fun createProfileTab(project: Project, name: String, workingDirectory: String, activate: Boolean): Content? {
+        return try {
+            val tab = TerminalToolWindowTabsManager.getInstance(project).createTabBuilder()
+                .workingDirectory(workingDirectory)
+                .tabName(name)
+                .requestFocus(activate)
+                .deferSessionStartUntilUiShown(false)
+                .createTab()
+            tab.view.title.change { userDefinedTitle = name }
+            if (activate) {
+                getTerminalToolWindow(project)?.let { tw ->
+                    tw.contentManager.setSelectedContent(tab.content, true)
+                    tw.activate(null, true)
+                }
+            }
+            logger.info("Created profile tab '$name' in $workingDirectory")
+            tab.content
+        } catch (ex: Exception) {
+            logger.warn("Failed to create profile tab '$name' in $workingDirectory: ${ex.message}", ex)
+            null
+        }
+    }
+
+    /** The open terminal tab whose persistent name is exactly [name], when there is one. */
+    @com.intellij.util.concurrency.annotations.RequiresEdt
+    fun findContentByPersistentName(project: Project, name: String): Content? =
+        persistentNamesSnapshot(project).entries.firstOrNull { it.value == name }?.key
 
     /**
      * Gets the terminal tool window.

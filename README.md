@@ -13,6 +13,7 @@ Keep multiple Claude sessions organized - each terminal tab remembers its sessio
 - **Tab rename support** - Bindings follow when you rename terminal tabs
 - **Session title sync** - `/rename` in Claude renames the tab (persistently); renaming the tab renames the session
 - **Per-project launch profile** - Extra Claude launch arguments applied to every launch in a project
+- **Tab profiles** - Named tabs that run Claude in another directory (e.g. a git worktree outside the project) with their own arguments
 - **Session registry** - One JSON file per live session (`idle` / `busy` / `waiting`) for external tools
 
 ## Requirements
@@ -94,6 +95,7 @@ Right-click any terminal tab to access:
 - **Bind to Session...** - Associate a Claude session with this tab
 - **Resume Session** - Resume the bound session
 - **Push Tab Name to Claude Session** - `/rename` the session to this tab's name (only while it is idle)
+- **Open Profile Tabs / Open Profile Tab** - Open this project's tab profiles (shown only when the project has profiles)
 - **Session History** - Switch to a previous session
 - **Copy Session ID** - Copy the session UUID
 - **Unbind Session** - Remove the binding
@@ -126,6 +128,7 @@ Use the terminal dropdown (▼ next to +) → **Claude Session** to create a new
 | Setting | Description |
 |---------|-------------|
 | **Extra launch arguments** | Inserted after the Claude command on every launch in this project, e.g. `--channels plugin:name@marketplace`. Letters, digits and `_ . : = / , @ -` only; session selection flags are rejected. Stored in `.idea/workspace.xml`. |
+| **Tab profiles** | Tab name (exact), working directory (absolute or `~/...`), launch arguments (empty: the project default), keep open. A tab with that name runs `cd '<dir>' && claude <arguments> [--resume <id>]`. Open them with Tools > Open Profile Tabs, the terminal tab menu, or the terminal's new-tab dropdown; "keep open" tabs come back at project open. Renaming a profile tab makes it an ordinary tab. |
 
 ## How It Works
 

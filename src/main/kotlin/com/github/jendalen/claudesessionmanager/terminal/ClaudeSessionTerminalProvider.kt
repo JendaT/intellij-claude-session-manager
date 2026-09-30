@@ -17,15 +17,21 @@ import org.jetbrains.plugins.terminal.ui.OpenPredefinedTerminalActionProvider
 class ClaudeSessionTerminalProvider : OpenPredefinedTerminalActionProvider {
 
     override fun listOpenPredefinedTerminalActions(project: Project): List<AnAction> {
+        // One entry per tab profile: the new-tab dropdown is where a terminal tab is
+        // opened, so a profile tab (a worktree proxy) is opened from here too.
+        val profileActions = com.github.jendalen.claudesessionmanager.services.TabProfileService.getInstance(project)
+            .profiles()
+            .map { com.github.jendalen.claudesessionmanager.actions.OpenProfileTabAction(it.name, "Claude: ${it.name}") }
+
         // Check if there are any sessions available for this project
         val sessionService = ClaudeSessionService.getInstance(project)
         val sessions = sessionService.getSessions()
 
         if (sessions.isEmpty()) {
-            return emptyList()
+            return profileActions
         }
 
-        return listOf(OpenClaudeSessionAction())
+        return listOf<AnAction>(OpenClaudeSessionAction()) + profileActions
     }
 
     /**

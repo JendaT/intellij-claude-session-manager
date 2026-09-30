@@ -45,6 +45,21 @@ class LaunchCommandTest {
         assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", id, " ") }
     }
 
+    // A tab profile's command changes directory first; && so a missing directory runs
+    // nothing rather than Claude in the wrong place.
+    @Test
+    fun `profile launches cd into the quoted directory first`() {
+        val home = System.getProperty("user.home")
+        assertEquals(
+            "cd '$home/Projects/Acme/worktrees/worker1' && claude --channels plugin:inbox-channel@local-tools --resume $id",
+            LaunchCommand.resume("claude", "--channels plugin:inbox-channel@local-tools", id, workingDirectory = "~/Projects/Acme/worktrees/worker1")
+        )
+        assertEquals("cd '/w/my dir' && claude", LaunchCommand.start("claude", "", "/w/my dir/"))
+        assertEquals("claude --resume $id", LaunchCommand.resume("claude", "", id, workingDirectory = null))
+        assertThrows<IllegalArgumentException> { LaunchCommand.start("claude", "", "/a'b") }
+        assertThrows<IllegalArgumentException> { LaunchCommand.start("claude", "", "relative") }
+    }
+
     @Test
     fun `rejects invalid session ids and invalid args`() {
         assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", "not-a-uuid") }

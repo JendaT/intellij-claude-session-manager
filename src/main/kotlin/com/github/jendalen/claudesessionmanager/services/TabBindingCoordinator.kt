@@ -282,7 +282,12 @@ class TabBindingCoordinator(private val project: Project) {
      */
     private fun registerSession(sessionId: String, tab: String, cwd: String?) {
         val projectName = project.name
-        val basePath = cwd ?: project.basePath
+        // Only a fallback: the hook writes the directory Claude really runs in and wins.
+        // But when this write comes first, a profile tab's session must not be published
+        // under the project folder - external readers join tabs to worktrees by this cwd.
+        val profileDir = ProjectSettingsService.getInstance(project).profileFor(tab)
+            ?.let { com.github.jendalen.claudesessionmanager.util.TabProfiles.expandHome(it.workingDirectory) }
+        val basePath = cwd ?: profileDir ?: project.basePath
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
             SessionRegistryService.getInstance().upsert(sessionId, projectName, tab, basePath)
         }

@@ -86,6 +86,13 @@ Each rule below was paid for by a live failure. Overriding one needs a dated rec
   merges. Both write atomically. Unbinding a tab does not remove the file - the session
   is still alive; project close does, because the terminals die with it (v0.7.0).
 
+- **D16 A tab's sessions run under its root.** The root is the tab's profile directory
+  (a tab whose persistent name equals a tab profile's name), else the project folder.
+  Every detection channel, the registry publish and the close listener check a cwd
+  against the target tab's root; the project-level filter accepts the folder or any
+  profile directory. Without profiles this is exactly the project-folder check of
+  v0.7 (amendment 2026-09-30).
+
 ## 3. Identity model
 
 `SessionBinding` (persisted per project in `.idea/workspace.xml`, component
@@ -139,7 +146,7 @@ create.
 
 | channel | service | identity accuracy | may create |
 |---|---|---|---|
-| `SessionStart` hook -> `~/.claude/ide-events/current-session.json` | `ClaudeHookEventService` | selected tab (weak) | yes, subject to D3/D6 |
+| `SessionStart` hook -> `~/.claude/ide-events/current-session.json` | `ClaudeHookEventService` | selected tab (weak); a cwd inside exactly one tab profile's directory goes to that profile's tab (v0.9.0) | yes, subject to D3/D6/D16 |
 | terminal output scan for UUIDs, confirmed by transcript file or index | `TerminalOutputMonitorService` | exact tab | yes |
 | `sessions-index.json` watch | `SessionWatcherService` | none (reconciles existing) | only genuinely new sessions |
 
@@ -205,7 +212,9 @@ session as `/rename`, else delivered with `--name` at the next auto-resume - ame
 by `ClaudeTitleSettingsService`.
 
 Project level (`ProjectSettingsService`, workspace file, component
-`ClaudeSessionManagerProject`): `extraLaunchArgs` - allowlist `[A-Za-z0-9_.:=/ ,@-]`,
+`ClaudeSessionManagerProject`): `tabProfiles` (name, working directory, launch
+arguments, keep open - amendment 2026-09-30; validated on save and on read), and
+`extraLaunchArgs` - allowlist `[A-Za-z0-9_.:=/ ,@-]`,
 single line, reserved session flags rejected (D14); re-validated on read. Edited on the
 "Launch Profile" page nested under the application page. Reference value:
 `--channels plugin:<name>@<marketplace>`, with the plugin on the managed-settings
@@ -217,8 +226,10 @@ rejected by the schema validator). Verified on a Max account without an organiza
 ## 8. User surface
 
 Terminal tab context menu (`Claude Session`): Bind to Session, Resume Session, Push
-Tab Name to Claude Session (v0.8.0), Session History, Current Session Info, Copy Session
-ID, Unbind, Settings. Terminal "new tab"
+Tab Name to Claude Session (v0.8.0), Session History, Open Profile Tabs and Open Profile
+Tab (v0.9.0, hidden without profiles), Current Session Info, Copy Session ID, Unbind,
+Settings. Tools menu: Open Profile Tabs. Terminal new-tab dropdown: "Claude: <profile>"
+per tab profile. Terminal "new tab"
 dropdown: "Claude Session" (pick a session, opens a bound tab). Tab decoration: colored
 Claude icon, live-indicator badge while Claude reports progress, tooltip
 `Claude: <status>`, OSC title stripped from protected tabs.
@@ -243,6 +254,11 @@ Claude icon, live-indicator badge while Claude reports progress, tooltip
   unsent draft at that moment, the draft is submitted together with the command.
   Titles are read from the transcript tail (256 KiB) and the `custom-title.json`
   sidecar, never from `sessions-index.json` (amendment 2026-09-19).
+- Tab profiles (amendment 2026-09-30): a tab that is already open when its profile is
+  created keeps running what it ran - the plugin never types into an open tab; it says
+  so when the bound session runs outside the profile directory. "Bind to Session..." on
+  a profile tab lists the project folder's sessions only. Keep-open profile tabs are
+  opened only when "Auto-resume on startup" is on.
 
 ## 10. Removed
 
@@ -254,3 +270,5 @@ Claude icon, live-indicator badge while Claude reports progress, tooltip
 
 - 2026-09-19 `docs/specs/2026-09-19-session-title-sync-amendment.md` - session title
   sync (v0.8.0): sections 2 (D14), 3, 5, 7, 8, 9.
+- 2026-09-30 `docs/specs/2026-09-30-tab-profiles-amendment.md` - tab profiles (v0.9.0):
+  sections 2 (D16), 5, 6, 7, 8, 9.
