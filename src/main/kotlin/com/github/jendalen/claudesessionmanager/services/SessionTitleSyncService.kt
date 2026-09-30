@@ -6,6 +6,7 @@ import com.github.jendalen.claudesessionmanager.util.ClaudePathResolver
 import com.github.jendalen.claudesessionmanager.util.NotificationHelper
 import com.github.jendalen.claudesessionmanager.util.SessionNameValidator
 import com.github.jendalen.claudesessionmanager.util.SessionTitleReader
+import com.github.jendalen.claudesessionmanager.util.TitleSyncRules
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
@@ -144,7 +145,7 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
             fingerprints[binding.id] = sessionId to fingerprint
 
             val title = SessionTitleReader.read(sessionFile)
-            if (title == binding.sessionTitle) continue
+            if ((title ?: "") == binding.sessionTitle) continue
             ApplicationManager.getApplication().invokeLater {
                 applyInbound(binding.id, sessionId, content, title)
             }
@@ -165,11 +166,15 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
         if (!binding.currentSessionId.equals(sessionId, ignoreCase = true)) return
         val tabUuid = binding.tabIdentifier.tabUuid ?: return
         if (TerminalHelper.findContentByTabId(project, tabUuid) !== content) return
-        if (title == binding.sessionTitle) return
+        if ((title ?: "") == binding.sessionTitle) return
 
-        bindingService.recordSessionTitle(binding.id, title)
-        logger.info("Title sync: session $sessionId reports title '${title ?: ""}' (was '${binding.sessionTitle ?: ""}')")
+        // "" records "looked, no title", so a /rename made later is told apart from a
+        // title the session already had when the plugin first saw it (TitleSyncRules).
+        val firstSighting = binding.sessionTitle == null
+        bindingService.recordSessionTitle(binding.id, title ?: "")
         if (title == null) return
+        logger.info("Title sync: session $sessionId reports title '$title'" +
+            (if (firstSighting) " (first sighting)" else " (was '${binding.sessionTitle}')"))
 
         // The registry carries Claude's title next to the tab name; external readers see
         // both and can tell whether they agree. Off the EDT like every registry write.
@@ -180,7 +185,7 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
         // A newly observed title either confirms our own push or is a rename Claude made
         // after it; either way the last change wins and nothing is pending.
         if (binding.pendingTitlePush != null) bindingService.setPendingTitlePush(binding.id, null)
-        if (SettingsService.getInstance().syncTabNames) renameTabToTitle(binding.id, content, title)
+        if (SettingsService.getInstance().syncTabNames) renameTabToTitle(binding.id, content, title, firstSighting)
     }
 
     /**
@@ -189,26 +194,40 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
      * the name is unique; two tabs named alike would both come back unbound.
      */
     @RequiresEdt
-    private fun renameTabToTitle(bindingId: String, content: Content, title: String): Boolean {
+    private fun renameTabToTitle(bindingId: String, content: Content, title: String, firstSighting: Boolean): Boolean {
         val persistentName = TerminalHelper.getPersistentName(project, content)
-        if (persistentName == title) return true
-        // A profile tab's name is its configuration: renaming it would end the profile
-        // (a renamed tab is no longer a profile tab), silently, on a /rename typed into
-        // the session. The title is still recorded and published to the registry.
-        if (ProjectSettingsService.getInstance(project).profileFor(persistentName) != null) {
-            logger.info("Title sync: not renaming profile tab '$persistentName' to '$title'")
-            return false
+        val label = persistentName ?: content.displayName
+        val decision = TitleSyncRules.decide(
+            currentName = persistentName,
+            title = title,
+            firstSighting = firstSighting,
+            userNamed = TerminalHelper.hasUserDefinedTitle(project, content),
+            // A profile tab's name is its configuration: renaming it would end the
+            // profile (a renamed tab is no longer a profile tab), silently, on a /rename
+            // typed into the session. The title is still recorded and published.
+            profileTab = ProjectSettingsService.getInstance(project).profileFor(persistentName) != null,
+            // BindingMigrationService re-attaches restored tabs by persistent name and
+            // only when the name is unique; two tabs named alike would both come back
+            // unbound.
+            nameTaken = BindingService.getInstance(project).getAllBindings().any {
+                it.id != bindingId && it.tabIdentifier.persistentName == title
+            }
+        )
+        when (decision) {
+            TitleSyncRules.Decision.ALREADY_NAMED -> return true
+            TitleSyncRules.Decision.PROFILE_TAB ->
+                logger.info("Title sync: not renaming profile tab '$label' to '$title'")
+            TitleSyncRules.Decision.KEEP_USER_NAME ->
+                logger.info("Title sync: keeping user-named tab '$label'; its session already had title '$title' when first seen")
+            TitleSyncRules.Decision.NAME_TAKEN ->
+                logger.info("Title sync: not renaming tab '$label' to '$title' - another binding already carries that name")
+            TitleSyncRules.Decision.RENAME -> {
+                val renamed = TerminalHelper.setUserDefinedTitle(project, content, title)
+                if (renamed) logger.info("Applied Claude session title '$title' to tab '$label'")
+                return renamed
+            }
         }
-        val clash = BindingService.getInstance(project).getAllBindings().any {
-            it.id != bindingId && it.tabIdentifier.persistentName == title
-        }
-        if (clash) {
-            logger.info("Title sync: not renaming tab '${persistentName ?: content.displayName}' to '$title' - another binding already carries that name")
-            return false
-        }
-        val renamed = TerminalHelper.setUserDefinedTitle(project, content, title)
-        if (renamed) logger.info("Applied Claude session title '$title' to tab '${persistentName ?: content.displayName}'")
-        return renamed
+        return false
     }
 
     /**
@@ -221,11 +240,12 @@ class SessionTitleSyncService(private val project: Project) : Disposable {
         ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed) return@invokeLater
             for (binding in BindingService.getInstance(project).getAllBindings()) {
-                val title = binding.sessionTitle ?: continue
+                val title = binding.sessionTitle?.takeIf { it.isNotEmpty() } ?: continue
                 if (binding.pendingTitlePush != null) continue
                 val tabUuid = binding.tabIdentifier.tabUuid ?: continue
                 val content = TerminalHelper.findContentByTabId(project, tabUuid) ?: continue
-                renameTabToTitle(binding.id, content, title)
+                // Switching sync on is the user asking for titles on tabs: not a first sighting.
+                renameTabToTitle(binding.id, content, title, firstSighting = false)
             }
         }
     }

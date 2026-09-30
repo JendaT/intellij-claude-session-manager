@@ -48,8 +48,10 @@
                 renames its bound tab, persistently; renaming a tab in the IDE renames the
                 session - typed as /rename while the session is idle, otherwise delivered with
                 --name at its next resume or through the new tab-menu action "Push Tab Name to
-                Claude Session". The "Sync Claude /rename to terminal tab name" setting now
-                works; "Push IDE tab renames to the Claude session" is new.</li>
+                Claude Session". A title the session already had when first seen renames only
+                a tab with a default name ("Local ..."). The "Sync Claude /rename to terminal
+                tab name" setting now works; "Push IDE tab renames to the Claude session" is
+                new.</li>
             <li>New: registry files carry the session's Claude-side title as "title".</li>
             <li>Changed: the launch profile rejects --name and -n; session naming belongs to
                 the plugin.</li>

@@ -139,3 +139,15 @@ session is idle, else reports why not. The balloon from S3 carries the same acti
 Titles for sessions without a bound tab; writing `custom-title.json` or the transcript
 (D13); pushing on `/clear`; renaming from the registry side (the orchestrator names a session by
 sending `/rename` through its channel if it ever needs to).
+
+## Revision 2026-09-30 - first sighting
+
+The first start of the built plugin in WebStorm would have renamed 7 of 26 bound tabs
+with titles their sessions got days earlier, overwriting names chosen on purpose
+("Kafka master", "Debugger"; IDEA's "Main dev" was renamed before this was caught).
+S2 step 3 now distinguishes a first sighting (the binding never recorded a title for
+this session - `sessionTitle == null`; after the first look it holds the title or `""`)
+from a change: a first sighting renames the tab only when the tab has no user-defined
+title (a default "Local ..." name); a change renames it as before. The rule is
+`util/TitleSyncRules.kt`, unit tested. Switching inbound sync on (`reapplyTitles`) is
+not a first sighting.

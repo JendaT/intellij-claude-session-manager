@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/rename <name>` is typed into the session while it is idle, and a session that is busy,
   waiting on a permission prompt or not running gets the name at its next auto-resume
   (`--name`) or through the new tab-menu action "Push Tab Name to Claude Session".
+  A title the session already had when the plugin first sees it renames only a tab
+  that still has a default name ("Local", "Local (2)"); tabs you named keep their names
+  until the next `/rename`.
   The "Sync Claude /rename to terminal tab name" checkbox, present since 0.1.0, now does
   something; "Push IDE tab renames to the Claude session" is new (both default on).
 - Registry files carry `title`: the session's Claude-side title, next to the IDE `tab`.

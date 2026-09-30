@@ -710,6 +710,14 @@ object TerminalHelper {
         }
     }
 
+    /**
+     * True when the tab carries a name the user gave it (a rename, or a restored tab that
+     * was renamed before), false for a default name ("Local", "Local (2)") or when the
+     * title cannot be resolved.
+     */
+    fun hasUserDefinedTitle(project: Project, content: Content): Boolean =
+        findTerminalTitle(project, content)?.userDefinedTitle?.isNotBlank() == true
+
     /** The open terminal tab whose persistent name is exactly [name], when there is one. */
     @com.intellij.util.concurrency.annotations.RequiresEdt
     fun findContentByPersistentName(project: Project, name: String): Content? =

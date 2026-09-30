@@ -203,7 +203,8 @@ the lazy-start caveat).
 `claudeCommand` (allowlist `[a-zA-Z0-9_./ -]`, default `claude`), `autoResumeEnabled`,
 `autoResumeDelayMs` (500-30000), `notifyOnSessionChange`, `notifyOnAutoDetection`,
 `syncTabNames` (inbound title sync: the session's `/rename` title becomes the tab's
-persistent name), `pushTabNameToSession` (outbound: an IDE rename is typed into an idle
+persistent name; a title already present when the plugin first sees the session renames
+only a default-named tab), `pushTabNameToSession` (outbound: an IDE rename is typed into an idle
 session as `/rename`, else delivered with `--name` at the next auto-resume - amendment
 2026-09-19), `customClaudeHomePath`, `fileWatcherDebounceMs`, `maxHistoryPerBinding`,
 `orphanedHistoryRetentionDays`, `forceOptionAsMetaKeyOff` (reverts the macOS

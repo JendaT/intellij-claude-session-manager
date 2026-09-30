@@ -115,7 +115,7 @@ Use the terminal dropdown (▼ next to +) → **Claude Session** to create a new
 | **Resume delay** | Wait time for terminal initialization (500-30000ms) |
 | **Notify on session change** | Show notification when `/clear` etc. changes session |
 | **Notify on auto-detection** | Show notification when Claude is auto-detected |
-| **Sync Claude /rename to terminal tab name** | The session's title becomes the tab's persistent name |
+| **Sync Claude /rename to terminal tab name** | The session's title becomes the tab's persistent name. A title the session already had when first seen renames only a tab with a default name ("Local ...") |
 | **Push IDE tab renames to the Claude session** | A renamed tab renames its session: `/rename` while idle, else `--name` at the next resume or the tab-menu action "Push Tab Name to Claude Session" |
 | **Claude command** | CLI command (e.g., `claude` or a custom alias) |
 | **Home directory** | Custom Claude home path (default: `~/.claude`) |

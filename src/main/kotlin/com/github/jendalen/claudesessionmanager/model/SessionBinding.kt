@@ -17,7 +17,7 @@ data class SessionBinding(
     val createdAt: Long,                 // When binding was created (epoch millis)
     val lastResumedAt: Long? = null,     // Last successful resume (epoch millis)
     val resumeCount: Int = 0,            // Number of successful resumes
-    val sessionTitle: String? = null,    // Last /rename title observed for currentSessionId
+    val sessionTitle: String? = null,    // Last /rename title seen for currentSessionId; "" = looked, none; null = never looked
     val pendingTitlePush: String? = null // IDE tab name not yet delivered to the session
 ) {
     /**
