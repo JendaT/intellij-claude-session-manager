@@ -170,7 +170,9 @@ outdated. The v1 `sessions.jsonl` append is gone.
 | `project`, `tab` | plugin | IDE project name and the tab's persistent name; written on bind and rename |
 | `title` | plugin | the session's own title (`/rename`, `--name`), written when observed; never cleared (v0.8.0) |
 
-Lifecycle: created by the hook on SessionStart (or by the plugin on bind if earlier),
+Lifecycle: created by the hook on SessionStart (or by the plugin on bind, or when it
+types a resume - which it publishes at once, since at IDE start no channel of the
+project is listening yet - if earlier),
 merged by both writers through temp file + atomic rename, deleted by the hook on
 SessionEnd and by the plugin on project close (`RegistryProjectCloseListener`); files
 older than 24 h whose `pid` is no longer running are swept once per IDE process and on

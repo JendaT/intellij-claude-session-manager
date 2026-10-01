@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Thread pool exhaustion"). The save is now handed to the platform's save queue from a
   background timer, still debounced by 200 ms. The title-sync poll no longer waits for
   the UI thread either.
+- Sessions auto-resumed in the first seconds after IDE start could stay without
+  `project`/`tab` in their registry file: their project's listeners were not up yet when
+  Claude reported in, and the event went only to other projects (observed 2026-09-30,
+  WT3-worker and WT2-worker). The plugin now publishes project and tab when it types the
+  resume. A profile tab that has to start a new session gets an id chosen by the plugin
+  (`--session-id`) and is bound immediately.
 
 ### Known limitations
 - A tab that is already open when its profile is created keeps running what it ran; the

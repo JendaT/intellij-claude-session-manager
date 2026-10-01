@@ -121,7 +121,12 @@ notification for an open profile tab whose Claude runs elsewhere.
 - [x] WebStorm hung restoring 26 tabs (17:03): `BindingService.syncToState` ran
       `project.save()` on the UI thread; the 0.8.0 title poll was parked in
       `invokeAndWait`. Both fixed; `NoBlockingUiWaitsTest` and
-      `scripts/check-freezes.sh` (runbook "Freeze check after a multi-tab restore").
+      `scripts/check-restart.sh` (runbook "Post-restart check").
+- [x] Startup race (20:45 restart): sessions auto-resumed before their project's hook
+      watcher and output monitor started never got project/tab in the registry. The
+      plugin now publishes when it types a launch; fresh profile-tab starts use a
+      plugin-chosen `--session-id` and are bound at once. Tests run the real hook script
+      in both orders; `scripts/check-restart.sh` checks completeness live.
 - [x] Title sync renamed user-named tabs on first sight - fixed (spec 2026-09-19,
       revision 2026-09-30).
 
@@ -139,4 +144,5 @@ notification for an open profile tab whose Claude runs elsewhere.
 - [ ] Close one profile tab, reopen the project: keep-open recreates it and resumes.
 - [ ] Rename a profile tab: next launch in it uses the project default, no `cd`.
 - [ ] 0.8.0 checklist (`docs/plans/2026-09-19-session-title-sync-plan.md`).
-- [ ] `scripts/check-freezes.sh WebStorm2026.2` exits 0 after the restart.
+- [ ] `scripts/check-restart.sh WebStorm2026.2` exits 0 after the restart (no freeze,
+      every launched session has project and tab).

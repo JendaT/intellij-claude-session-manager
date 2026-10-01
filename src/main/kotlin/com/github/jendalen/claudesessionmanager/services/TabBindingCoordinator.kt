@@ -266,6 +266,25 @@ class TabBindingCoordinator(private val project: Project) {
     }
 
     /**
+     * Publishes project and tab for a session the plugin has just typed a launch for,
+     * without waiting for any detection channel to confirm it.
+     *
+     * At IDE start the channels are not up yet when auto-resume types its commands: on
+     * 2026-09-30 a worktree project's hook watcher and output monitor started 18 s after
+     * its sessions were resumed, their SessionStart events reached only other projects
+     * (which skipped them on cwd) and the echoed `--resume <id>` line came before the
+     * output monitor attached - so `WT3-worker` and `WT2-worker` were never published.
+     * The plugin knows the id it typed; it publishes it. EDT (reads the tab's title).
+     */
+    @RequiresEdt
+    fun publishLaunched(content: Content, sessionId: String) {
+        if (!com.github.jendalen.claudesessionmanager.util.SessionIdValidator.isValid(sessionId)) return
+        val tab = TerminalHelper.getPersistentName(project, content) ?: content.displayName ?: return
+        registerSession(sessionId, tab, null)
+        logger.info("Published project/tab for launched session $sessionId (tab '$tab')")
+    }
+
+    /**
      * A bind is the moment a session's title becomes applicable to a tab: kick the title
      * sync so a fresh bind or a SessionStart applies it within a second, not five.
      */

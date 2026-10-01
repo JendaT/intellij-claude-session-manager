@@ -571,12 +571,12 @@ object TerminalHelper {
     }
 
     /**
-     * Builds `[cd '<dir>' &&] claude [extraArgs]` - a fresh session, in the tab profile's
-     * directory when [persistentName] names one.
+     * Builds `[cd '<dir>' &&] claude [extraArgs] [--session-id <id>]` - a fresh session, in
+     * the tab profile's directory when [persistentName] names one.
      */
-    fun buildStartCommand(project: Project, persistentName: String? = null): String {
+    fun buildStartCommand(project: Project, persistentName: String? = null, sessionId: String? = null): String {
         val (args, directory) = launchSpecFor(project, persistentName)
-        return LaunchCommand.start(getClaudeCommand(), args, directory)
+        return LaunchCommand.start(getClaudeCommand(), args, directory, sessionId)
     }
 
     /**

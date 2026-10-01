@@ -29,9 +29,16 @@ object LaunchCommand {
         return inDirectory(workingDirectory, join(claudeCommand, extraArgs, *rest))
     }
 
-    /** `claude [extraArgs]` - a fresh session, in [workingDirectory] when given. */
-    fun start(claudeCommand: String, extraArgs: String, workingDirectory: String? = null): String =
-        inDirectory(workingDirectory, join(claudeCommand, extraArgs))
+    /**
+     * `claude [extraArgs] [--session-id <id>]` - a fresh session, in [workingDirectory]
+     * when given. [sessionId] lets the plugin know the new session's id before Claude
+     * reports it (Claude refuses an id already in use, so callers pass a new UUID).
+     */
+    fun start(claudeCommand: String, extraArgs: String, workingDirectory: String? = null, sessionId: String? = null): String {
+        if (sessionId == null) return inDirectory(workingDirectory, join(claudeCommand, extraArgs))
+        require(SessionIdValidator.isValid(sessionId)) { "Invalid session ID format: $sessionId" }
+        return inDirectory(workingDirectory, join(claudeCommand, extraArgs, "--session-id $sessionId"))
+    }
 
     /**
      * A profile tab's command always changes directory first, even when the shell already

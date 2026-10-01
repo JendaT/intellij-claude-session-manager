@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * write-intent lock), every Dispatchers.Default worker parked on the lock, and two
  * title-sync threads were parked in invokeAndWait. None of these calls may come back.
  * The IDE cannot be started in these unit tests; the live check is in
- * docs/runbooks/build-install-diagnose.md ("Freeze check after a multi-tab restore").
+ * docs/runbooks/build-install-diagnose.md ("Post-restart check").
  */
 class NoBlockingUiWaitsTest {
 

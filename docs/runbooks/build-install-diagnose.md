@@ -96,18 +96,21 @@ cwd>/<session-id>.jsonl`; Claude Code purges them after `cleanupPeriodDays` (def
   src/main/resources/hooks/session-notify.sh <<< '{"hook_event_name":"Stop","session_id":"<uuid>"}'`.
 - Watch a session flip: `watch -n1 'jq -c "{state,tab,pid}" ~/.claude/ide-events/sessions/*.json'`.
 
-## Freeze check after a multi-tab restore
+## Post-restart check (freezes, registry completeness)
 
 After restarting an IDE that restores 10 or more terminal tabs (WebStorm with the
 Shop and Acme projects restores ~26), run:
 
 ```bash
-scripts/check-freezes.sh WebStorm2026.2      # or IntelliJIdea2026.2
+scripts/check-restart.sh WebStorm2026.2      # or IntelliJIdea2026.2
 ```
 
-It reads `idea.log` from the latest IDE start: tabs monitored, sessions auto-resumed,
-any `Thread pool exhaustion` / `UI was frozen` line, and this plugin's stack frames in
-thread dumps written since the start. Exit 0 = clean. On 2026-09-30 (17:03 start, 15
+It reads `idea.log` (and `idea.1.log`, which holds the start after a rotation) from the
+latest IDE start: tabs monitored, sessions auto-resumed, any `Thread pool exhaustion` /
+`UI was frozen` line, this plugin's stack frames in thread dumps written since the
+start, and every session the plugin launched since the start whose registry file lacks
+`project` or `tab`. Exit 0 = clean. The 2026-09-30 20:45 start (before the launch-time
+publish) had WT3-worker and WT2-worker incomplete; they were patched by hand at 20:54. On 2026-09-30 (17:03 start, 15
 sessions resumed) it reported Dispatchers.Default unresponsive for over two minutes with
 `BindingService.syncToState` -> `ProjectImpl.save` on the UI thread and the title poll
 parked in `invokeAndWait` in every dump; `NoBlockingUiWaitsTest` keeps both out of the

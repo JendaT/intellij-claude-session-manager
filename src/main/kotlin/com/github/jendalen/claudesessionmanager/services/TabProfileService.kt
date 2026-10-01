@@ -259,16 +259,20 @@ class TabProfileService(private val project: Project) {
                 if (sent) {
                     bindingService.markBindingResumed(decision.binding.id)
                     coordinator.applyTabSideEffects(content)
+                    coordinator.publishLaunched(content, decision.sessionId)
                     logger.info("Opened profile tab '${profile.name}' and resumed session ${decision.sessionId}")
                 }
             }
             is Decision.Fresh -> {
-                // Attach the tab's old binding first, so the new session's first event
-                // updates it (its history keeps the old session) instead of creating a
-                // second binding for the same name.
+                // Attach the tab's old binding first, so the bind below updates it (its
+                // history keeps the old session) instead of creating a second binding for
+                // the same name. The plugin picks the new id (--session-id) and binds it
+                // directly: keep-open tabs are opened at project start, before this
+                // project's channels listen, and a fresh claude prints no id.
                 decision.binding?.let { bindingService.attachTabUuid(it.id, tabId, profile.name) }
-                coordinator.expectFreshSession(tabId)
-                if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project, profile.name))) {
+                val newSessionId = java.util.UUID.randomUUID().toString()
+                if (TerminalHelper.executeCommand(context, TerminalHelper.buildStartCommand(project, profile.name, newSessionId))) {
+                    coordinator.bindOrUpdate(content, newSessionId, source = "launch", force = true)
                     coordinator.applyTabSideEffects(content)
                     logger.info("Opened profile tab '${profile.name}' with a new session" + (decision.reason?.let { " - $it" } ?: ""))
                     decision.reason?.let {

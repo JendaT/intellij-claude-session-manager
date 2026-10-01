@@ -349,13 +349,16 @@ class AutoResumeService : ProjectActivity {
 
             if (startFresh) {
                 val coordinator = TabBindingCoordinator.getInstance(project)
-                // Through the suppression window: the new session's first event must be
-                // allowed to update this tab's binding (the old session stays in history).
-                tabId?.let { coordinator.expectFreshSession(it) }
-                val command = TerminalHelper.buildStartCommand(project, TerminalHelper.persistentNameOf(project, context))
+                // The plugin chooses the new session's id (--session-id) and binds it right
+                // away: at startup no channel is listening yet, and a fresh claude prints no
+                // id, so waiting for SessionStart left the tab on the old session and the
+                // next restart started yet another one. The old session stays in history.
+                val newSessionId = java.util.UUID.randomUUID().toString()
+                val command = TerminalHelper.buildStartCommand(project, TerminalHelper.persistentNameOf(project, context), newSessionId)
                 return@withContext if (TerminalHelper.executeCommand(context, command)) {
+                    coordinator.bindOrUpdate(content, newSessionId, source = "launch", force = true)
                     coordinator.applyTabSideEffects(content)
-                    logger.info("Started a new session in profile tab '$displayName' instead of resuming $sessionId")
+                    logger.info("Started new session $newSessionId in profile tab '$displayName' instead of resuming $sessionId")
                     ResumeOutcome.STARTED_FRESH to content
                 } else {
                     logger.warn("Failed to start a new session in profile tab '$displayName'")
@@ -368,6 +371,7 @@ class AutoResumeService : ProjectActivity {
             if (success) {
                 bindingService.markBindingResumed(binding.id)
                 TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
+                TabBindingCoordinator.getInstance(project).publishLaunched(content, sessionId)
                 logger.info("Auto-resumed session $sessionId in tab '$displayName'")
                 ResumeOutcome.RESUMED to content
             } else {
@@ -763,6 +767,7 @@ class AutoResumeService : ProjectActivity {
                                     bindingService.attachTabUuid(binding.id, tabId, persistentName)
                                     bindingService.markBindingResumed(binding.id)
                                     TabBindingCoordinator.getInstance(project).applyTabSideEffects(content)
+                                    TabBindingCoordinator.getInstance(project).publishLaunched(content, resumableSessionId)
                                     logger.info("Recreated and resumed tab '$tabName'")
                                 }
                             }

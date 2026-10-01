@@ -43,6 +43,10 @@
                 synchronous project save on the UI thread; it is now queued with the
                 platform's saver from a background timer. The title-sync poll no longer waits
                 for the UI thread.</li>
+            <li>Fixed: sessions auto-resumed right after IDE start could miss project/tab in
+                the registry (their project was not listening yet). The plugin publishes when
+                it types the resume; new sessions in profile tabs get a plugin-chosen id and
+                are bound at once.</li>
             <li>Limitation: a tab already open when its profile is created keeps running what
                 it ran; close it and open the profile tab.</li>
         </ul>

@@ -118,4 +118,46 @@ class HookScriptTest {
         assertNull(File(events, "sessions").listFiles()?.firstOrNull { it.name.endsWith(".json") })
         assertFalse(File(events, "current-session.json").exists())
     }
+
+    // 2026-09-30 20:45: auto-resume typed `--resume` for WT3-worker 18 s before its
+    // project's hook watcher started; Claude's SessionStart was written by this script
+    // first and seen only by other projects, which skipped it. The plugin now publishes
+    // project/tab when it types the launch - after the SessionStart in this order - and
+    // the file must end up complete, with the hook's cwd, state and pid intact.
+    @Test
+    fun `launch publish after a SessionStart nobody handled completes the file`() {
+        run(event("SessionStart", ""","source":"resume""""))
+        val before = session()
+        assertNull(before["project"], "nothing published yet: the owning project was not listening")
+
+        // AutoResumeService -> TabBindingCoordinator.publishLaunched -> upsert, with the
+        // profile/project directory only as a fallback cwd.
+        SessionRegistryService().upsert(id, "Shop-worktree3", "WT3-worker", "/fallback/dir", dir = File(events, "sessions"))
+        var obj = session()
+        assertEquals("Shop-worktree3", obj["project"]!!.jsonPrimitive.content)
+        assertEquals("WT3-worker", obj["tab"]!!.jsonPrimitive.content)
+        assertEquals("/tmp/proj", obj["cwd"]!!.jsonPrimitive.content, "the hook's cwd is where Claude runs and wins")
+        assertEquals("idle", obj["state"]!!.jsonPrimitive.content)
+        assertEquals(before["pid"], obj["pid"])
+
+        run(event("UserPromptSubmit"))
+        obj = session()
+        assertEquals("busy", obj["state"]!!.jsonPrimitive.content)
+        assertEquals("WT3-worker", obj["tab"]!!.jsonPrimitive.content)
+    }
+
+    // The usual order when the shell starts lazily: the plugin publishes as it types,
+    // Claude reports in seconds later. The hook must keep project/tab and replace the
+    // fallback cwd with the real one.
+    @Test
+    fun `SessionStart after the launch publish keeps project and tab`() {
+        SessionRegistryService().upsert(id, "acme-server", "acme-worker1", "/fallback/worktree", dir = File(events, "sessions"))
+        assertNull(session()["state"], "a bound tab with no Claude behind it yet")
+        run(event("SessionStart", ""","source":"resume""""))
+        val obj = session()
+        assertEquals("acme-server", obj["project"]!!.jsonPrimitive.content)
+        assertEquals("acme-worker1", obj["tab"]!!.jsonPrimitive.content)
+        assertEquals("/tmp/proj", obj["cwd"]!!.jsonPrimitive.content)
+        assertEquals("idle", obj["state"]!!.jsonPrimitive.content)
+    }
 }

@@ -60,6 +60,16 @@ class LaunchCommandTest {
         assertThrows<IllegalArgumentException> { LaunchCommand.start("claude", "", "relative") }
     }
 
+    // A fresh session whose id the plugin chooses, so it can be bound and published
+    // before any channel reports it (startup, profile tabs).
+    @Test
+    fun `start can carry a plugin-chosen session id`() {
+        assertEquals("cd '/w' && claude --channels plugin:a@b --session-id $id", LaunchCommand.start("claude", "--channels plugin:a@b", "/w", id))
+        assertEquals("claude", LaunchCommand.start("claude", "", null, null))
+        assertThrows<IllegalArgumentException> { LaunchCommand.start("claude", "", null, "not-a-uuid") }
+        assertThrows<IllegalArgumentException> { LaunchCommand.start("claude", "", null, "$id; ls") }
+    }
+
     @Test
     fun `rejects invalid session ids and invalid args`() {
         assertThrows<IllegalArgumentException> { LaunchCommand.resume("claude", "", "not-a-uuid") }
