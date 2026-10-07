@@ -25,6 +25,13 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.9.1</h3>
+        <ul>
+            <li>Fixed: the session registry lost a session's "title" after its first restart.
+                The file is deleted when a session ends and recreated at the next launch; the
+                plugin now writes the known title again whenever it publishes project and
+                tab.</li>
+        </ul>
         <h3>0.9.0</h3>
         <ul>
             <li>New: tab profiles (Launch Profile page, per project). A terminal tab named as a

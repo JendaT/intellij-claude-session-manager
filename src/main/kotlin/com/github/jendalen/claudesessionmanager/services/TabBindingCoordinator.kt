@@ -307,8 +307,13 @@ class TabBindingCoordinator(private val project: Project) {
         val profileDir = ProjectSettingsService.getInstance(project).profileFor(tab)
             ?.let { com.github.jendalen.claudesessionmanager.util.TabProfiles.expandHome(it.workingDirectory) }
         val basePath = cwd ?: profileDir ?: project.basePath
+        // The title sync publishes a title only when it changes, but SessionEnd and project
+        // close delete the file; the file recreated at the next launch never got it back
+        // (2026-10-05: none of the titled sessions had one left). Blank ("looked, no
+        // title") is ignored by upsert.
+        val title = BindingService.getInstance(project).findBindingBySessionId(sessionId)?.sessionTitle
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
-            SessionRegistryService.getInstance().upsert(sessionId, projectName, tab, basePath)
+            SessionRegistryService.getInstance().upsert(sessionId, projectName, tab, basePath, title)
         }
     }
 

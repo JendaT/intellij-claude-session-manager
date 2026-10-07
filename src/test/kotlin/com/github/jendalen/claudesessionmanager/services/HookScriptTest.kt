@@ -160,4 +160,27 @@ class HookScriptTest {
         assertEquals("/tmp/proj", obj["cwd"]!!.jsonPrimitive.content)
         assertEquals("idle", obj["state"]!!.jsonPrimitive.content)
     }
+
+    // 2026-10-05: titled sessions lost registry "title" after the first restart. SessionEnd
+    // deletes the file, the next launch recreates it, and the title sync stays silent
+    // because the binding's title has not changed. The launch publish now carries the
+    // binding's title; it must survive the hook in either order.
+    @Test
+    fun `title published at launch survives a restart in both orders`() {
+        val sessions = File(events, "sessions")
+        SessionRegistryService().upsert(id, "proj", "Main Claude", null, "payments", dir = sessions)
+        run(event("SessionStart", ""","source":"resume""""))
+        assertEquals("payments", session()["title"]!!.jsonPrimitive.content)
+
+        run(event("SessionEnd"))
+        assertFalse(sessionFile().exists(), "SessionEnd deletes the file, title included")
+
+        run(event("SessionStart", ""","source":"resume""""))
+        assertNull(session()["title"], "the hook alone does not know the title")
+        SessionRegistryService().upsert(id, "proj", "payments", null, "payments", dir = sessions)
+        run(event("UserPromptSubmit"))
+        val obj = session()
+        assertEquals("payments", obj["title"]!!.jsonPrimitive.content)
+        assertEquals("busy", obj["state"]!!.jsonPrimitive.content)
+    }
 }

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-07
+
+### Fixed
+- Registry files lost `title` after a session's first restart: `SessionEnd` and project
+  close delete the file, the next launch recreates it, and the title sync wrote the
+  title only when it changed (observed 2026-10-05 on every titled session). The
+  plugin now includes the binding's known title whenever it publishes project and tab.
+
 ## [0.9.0] - 2026-09-30
 
 ### Added

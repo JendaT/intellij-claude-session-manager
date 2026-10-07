@@ -38,8 +38,8 @@ merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-
   2026-09-30 first-sighting rule (user-named tabs keep their names). Live: inbound
   `/rename` -> tab rename observed and persistent across restarts. Open: the outbound
   push has never run (whether the reworked terminal's `sendText` delivers a bare CR to
-  Claude's prompt box is still unknown), and the registry `title` is lost after the first
-  restart (defect recorded in the plan, fix not made).
+  Claude's prompt box is still unknown). The registry `title` lost after the first
+  restart is fixed in 0.9.1 (2026-10-07, awaiting a live check after restart).
 
 - [~] **Tab profiles** (2026-09-30): hand-off `docs/handoffs/2026-09-30-tab-profiles.md`,
   spec `docs/specs/2026-09-30-tab-profiles-amendment.md`, plan
@@ -56,8 +56,7 @@ merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-
 
 - [ ] **Release.** Nothing is tagged after `v0.6.5`; 0.6.6 and 0.7.0 are on `main`,
   0.8.0 and 0.9.0 on `feature/tab-profiles`. Every one of them has run live. Decide
-  whether to tag the intermediate versions or merge and release 0.9.0 (or 0.9.1 with the
-  registry `title` fix) alone.
+  whether to tag the intermediate versions or merge and release 0.9.1 alone.
 - [x] `CHANGELOG.md` backfilled 0.6.0-0.7.0 (2026-09-17); keep it in sync with the
   `plugin.xml` change-notes from now on.
 - [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).

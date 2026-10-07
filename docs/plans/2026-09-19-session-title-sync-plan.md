@@ -259,7 +259,10 @@ implementation summary lists what is unit tested versus what needs the live chec
 
 ## Found during live verification (2026-10-05)
 
-- [ ] **Registry `title` is lost after the first restart.** Every titled Acme session
+- [x] **Registry `title` is lost after the first restart.** Fixed 2026-10-07 in 0.9.1
+      (`TabBindingCoordinator.registerSession`; `HookScriptTest` covers the restart
+      sequence against the real hook script; the coordinator lookup itself is verified
+      live only). Every titled Acme session
       (`acme-aux`, `acme-main`, `pg18`, `unify-be-fe-translation-keys`) has a registry file
       without `title` on 2026-10-05. `SessionTitleSyncService.applyInbound` publishes
       `title` only when the title differs from `binding.sessionTitle`; `SessionEnd` (hook)
