@@ -132,17 +132,57 @@ notification for an open profile tab whose Claude runs elsewhere.
 
 ## Live verification (Acme, after install and restart)
 
-- [ ] Enter the two profiles; the page shows no warning for them.
-- [ ] "Open Profile Tabs": two tabs `acme-worker1`, `acme-worker2`; each runs
+Status 2026-10-05, from WebStorm `idea.log` (rotated files back to 2026-09-27), the
+registry and Acme's `workspace.xml`. The installed jar is the `6993180` build (both
+IDEs, 2026-10-01 10:18); WebStorm restarted on it 2026-10-01 11:51, 10-02 13:01, 10-04
+10:16 and 10-04 17:09.
+
+- [x] Enter the two profiles; the page shows no warning for them. Both saved in
+      `workspace.xml` (`acme-worker1`/`acme-worker2`, `~/Projects/Acme/worktrees/workerN`,
+      keep open, `--channels plugin:inbox-channel@local-tools`); both directories exist and are
+      linked worktrees, so no warning applies. The page itself was not observed.
+- [~] "Open Profile Tabs": two tabs `acme-worker1`, `acme-worker2`; each runs
       `cd '<worktree>' && claude --channels plugin:inbox-channel@local-tools`; the existing
       main-clone session of `acme-worker2` is not carried over (INFO line
       "ran in ... not under profile directory").
-- [ ] Registry files for both sessions: `"tab": "acme-workerN"`,
-      `"cwd": ".../worktrees/workerN"`, `"project": "acme-server"`.
-- [ ] Close and reopen the project: both tabs come back and resume their sessions in
+      The carry-over rule held for both tabs at the 2026-09-30 20:45 restart ("Session
+      dcf76655 / 5d3b46d6 last ran in '.../acme-server', not under profile ...";
+      fresh sessions started). The action itself was never used - the two tabs already
+      existed and became profile tabs by name; no "Opened profile tab" line exists.
+- [x] Registry files for both sessions: `"tab": "acme-workerN"`,
+      `"cwd": ".../worktrees/workerN"`, `"project": "acme-server"`. `d6c3a16a`
+      (worker1, plugin-chosen id from the 10-01 start) and `ab7a7235` (worker2), both idle
+      with live pids on 2026-10-05.
+- [x] Close and reopen the project: both tabs come back and resume their sessions in
       the worktrees; other tabs resume in the main clone with the project default.
+      Observed across four IDE restarts (not a project close): "Auto-resumed session
+      d6c3a16a / ab7a7235 in tab 'acme-workerN'", then SessionStart "attributed to profile
+      tab 'acme-workerN' by its cwd '.../worktrees/workerN'". `acme-aux` resumed as
+      `claude-x --channels plugin:inbox-channel@local-tools --resume 8e9fd95c...` with no `cd`;
+      the other Acme registry files have the main clone as `cwd`.
 - [ ] Close one profile tab, reopen the project: keep-open recreates it and resumes.
+      Not exercised (no "keep-open profile tab(s)" line).
 - [ ] Rename a profile tab: next launch in it uses the project default, no `cd`.
-- [ ] 0.8.0 checklist (`docs/plans/2026-09-19-session-title-sync-plan.md`).
-- [ ] `scripts/check-restart.sh WebStorm2026.2` exits 0 after the restart (no freeze,
-      every launched session has project and tab).
+      Not exercised.
+- [~] 0.8.0 checklist (`docs/plans/2026-09-19-session-title-sync-plan.md`): inbound
+      rename observed; outbound push not exercised; registry `title` defect found there.
+- [x] `scripts/check-restart.sh WebStorm2026.2` exits 0 after the restart (no freeze,
+      every launched session has project and tab). 10-04 17:09 start: 5 tabs monitored, 5
+      resumed, 4 complete, 1 ended, no freeze - run against the concatenated rotated logs,
+      see the first finding below. The 2026-09-30 20:45 start (pre-`6993180`) is the one
+      that left `fef2c9c9` incomplete.
+
+## Found during live verification (2026-10-05)
+
+- [ ] `scripts/check-restart.sh` reads only `idea.log` and `idea.1.log`. On 2026-10-05
+      13:06 WebStorm wrote 20 MB in two seconds (IDE exceptions for
+      `Shop-worktree1/.../dist-http/...` - not this plugin), so the 10-04 17:09 start
+      sat in `idea.3.log` and the script exited 2 ("no 'IDE STARTED' line"). Walk back
+      through the rotated files until a start is found; `grep -a`, the logs contain
+      binary bytes.
+- [ ] `scripts/check-restart.sh` flags any thread dump with a plugin frame anywhere.
+      IDEA froze for 21 s on 2026-10-04 17:11:40; the EDT was in
+      `RefreshProgress -> ProjectFrameHelper.getStatusBar`, and the plugin frames were
+      pooled threads in `File.exists` (title poll `readTitles`, session and hook
+      watchers) - victims of the same I/O stall, not its cause. Report plugin frames on
+      the EDT (or holding the write lock) separately from pooled-thread frames.

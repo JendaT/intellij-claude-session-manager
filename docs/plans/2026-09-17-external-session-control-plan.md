@@ -1,7 +1,7 @@
 ---
 created: 2026-09-17
 session_id: 3c0d7ea2-c155-4353-96cd-5396c75bf7c7
-status: active
+status: completed
 parent_spec: docs/handoffs/2026-09-16-external-session-control.md
 related_roadmap_items: [external-session-control]
 ---
@@ -159,6 +159,9 @@ Verified against the source and the WebStorm 2026.2 logs on 2026-09-17.
   acceptance 1-3 below observed (IDEA 2026-09-18, WebStorm 2026-09-19; three defects
   recorded under "Live verification status", none of which blocks the acceptance
   criteria themselves - see the release note there).
+- [x] Fixes for the three defects and both review runs merged to `main` (`77b9ed4`,
+  2026-09-19). Plan closed 2026-10-05. 0.7.0 was never tagged; the release decision is on
+  the roadmap (0.8.0 and 0.9.0 are stacked on top of it on `feature/tab-profiles`).
 
 ## Live verification status
 

@@ -34,7 +34,10 @@ beyond D13 (the sidecar and the transcript are READ only).
       project is not typed into. The full ownership check GPT asked for (prove the tab's
       foreground process is that Claude pid) is not available through the terminal API;
       the heuristic and the character rule are what shipped.
-- [ ] Live verification checklist (below) - not started.
+- [~] Live verification checklist (below) - partly observed 2026-09-30..2026-10-05 in
+      WebStorm (installed 2026-09-30 with 0.9.0, which carries 0.8.0). Inbound rename
+      works and persists; the outbound push has never run; one defect found (registry
+      `title` lost on restart, "Found during live verification" below).
 
 ## Step 1 - Binding model carries the title state
 
@@ -233,16 +236,37 @@ implementation summary lists what is unit tested versus what needs the live chec
 
 ## Live verification checklist (after install, both IDEs)
 
-- [ ] `/rename foo` in a bound tab renames the tab to `foo` within ~5 s; the log has
+- [~] `/rename foo` in a bound tab renames the tab to `foo` within ~5 s; the log has
       "Applied Claude session title 'foo'"; the registry file shows `"title": "foo"`
       and `"tab": "foo"`; after an IDE restart the tab comes back as `foo` and resumes.
-- [ ] Rename an idle bound tab in the IDE to `bar`: Claude prints "Session renamed to:
+      Observed 2026-09-30 20:47 (WebStorm, Acme): session `8e9fd95c` "reports title
+      'acme-aux' (was '')", applied to tab 'Main Claude'; registry `"tab": "acme-aux"`;
+      the tab came back as `acme-aux` and resumed after the 10-01, 10-02 and two 10-04
+      restarts. **Fails on `"title"`**: the registry file has none (defect below).
+- [ ] (not exercised: no "Pushed '/rename" line in either IDE's retained logs, which
+      reach back to 2026-09-27 in WebStorm and 2026-09-30 in IDEA)
+      Rename an idle bound tab in the IDE to `bar`: Claude prints "Session renamed to:
       bar" - no stray newline in the prompt box (if the command sits unsent, the
       reworked terminal wraps `sendText` in bracketed paste: fall back to sending the
       text and a separate `\r`, and record it here).
-- [ ] Rename a busy tab: balloon "session is busy", `pendingTitlePush` in
+- [ ] (not exercised: no "Title push deferred" line) Rename a busy tab: balloon "session is busy", `pendingTitlePush` in
       `workspace.xml`; "Push now" once idle delivers it; or restart -> the resume
       command carries `--name 'bar'` and the pending mark clears after start.
-- [ ] Two tabs whose sessions share a title: second rename skipped with the INFO line,
+- [ ] (not exercised) Two tabs whose sessions share a title: second rename skipped with the INFO line,
       registry `title` still written.
-- [ ] Launch Profile page rejects `--name x` and `-dn`.
+- [ ] Launch Profile page rejects `--name x` and `-dn` (unit tested in
+      `LaunchArgsValidatorTest`; the page itself not checked).
+
+## Found during live verification (2026-10-05)
+
+- [ ] **Registry `title` is lost after the first restart.** Every titled Acme session
+      (`acme-aux`, `acme-main`, `pg18`, `unify-be-fe-translation-keys`) has a registry file
+      without `title` on 2026-10-05. `SessionTitleSyncService.applyInbound` publishes
+      `title` only when the title differs from `binding.sessionTitle`; `SessionEnd` (hook)
+      and `RegistryProjectCloseListener` delete the file, the next launch recreates it from
+      the hook plus `TabBindingCoordinator.registerSession`/`publishLaunched` (project,
+      tab, cwd - no title), and the poll then sees an unchanged title and writes nothing.
+      Fix: `registerSession` looks up the binding that holds the session and passes its
+      non-blank `sessionTitle` to `SessionRegistryService.upsert` (null leaves an existing
+      value alone; the hook's `. + {...}` merge keeps it when the hook writes second);
+      a unit test on the publish path.

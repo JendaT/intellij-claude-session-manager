@@ -1,6 +1,6 @@
 ---
 type: roadmap
-last_updated: 2026-09-19
+last_updated: 2026-10-05
 ---
 
 # Claude Session Manager - roadmap
@@ -19,40 +19,45 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
   window, history fallback for unpersisted ids, hook events cannot move sessions between
   live tabs, dedup reverts instead of deleting, decoration on the reuse-existing path.
   Verified across the 2026.1 -> 2026.2 IDE update with ~19 sessions preserved.
+- [x] v0.7.0 - external session control (plan
+  `docs/plans/2026-09-17-external-session-control-plan.md`, completed): per-project extra
+  launch args, session registry with idle/busy/waiting state and pid under
+  `~/.claude/ide-events/sessions/`, eager launch of every restored tab, teams module
+  removed. Live-verified 2026-09-18 (IDEA) and 2026-09-19 (WebStorm, 28 bindings); the
+  three defects and two review runs fixed. On `main` at `77b9ed4`; not tagged.
 
 ## In flight
 
-- [~] **External session control** (2026-09-17): hand-off
-  `docs/handoffs/2026-09-16-external-session-control.md`, plan
-  `docs/plans/2026-09-17-external-session-control-plan.md`. Code complete as v0.7.0
-  (per-project extra launch args, session registry with idle/busy/waiting state and pid
-  under `~/.claude/ide-events/sessions/`, eager launch of every restored tab, teams
-  module removed). Live-verified 2026-09-18 (IDEA) and 2026-09-19 (WebStorm, 28
-  bindings); the three defects that run exposed are fixed (registry liveness before
-  resume, output-channel cwd guard, suppressed-path publish). Awaiting `verifyPlugin`
-  and release.
+Branch state 2026-10-05: `main` = 0.7.0. `feature/session-title-sync` (0.8.0) and
+`feature/tab-profiles` (0.9.0, stacked on it, plus three fixes 2026-09-30..10-01) are not
+merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-01.
 
 - [~] **Session title sync** (2026-09-19): spec
   `docs/specs/2026-09-19-session-title-sync-amendment.md`, plan
-  `docs/plans/2026-09-19-session-title-sync-plan.md`. Code complete as v0.8.0 on
-  `feature/session-title-sync` (transcript-tail title reader, tab rename through the
-  persistent name, idle-only `/rename` push with `--name` delivery at resume, registry
-  `title`, "Push Tab Name to Claude Session" action, 74 unit tests). Awaiting the live
-  checklist at the end of the plan (both IDEs) - in particular whether the reworked
-  terminal's `sendText` delivers a bare CR to Claude's prompt box.
+  `docs/plans/2026-09-19-session-title-sync-plan.md`. Code complete as v0.8.0, plus the
+  2026-09-30 first-sighting rule (user-named tabs keep their names). Live: inbound
+  `/rename` -> tab rename observed and persistent across restarts. Open: the outbound
+  push has never run (whether the reworked terminal's `sendText` delivers a bare CR to
+  Claude's prompt box is still unknown), and the registry `title` is lost after the first
+  restart (defect recorded in the plan, fix not made).
 
 - [~] **Tab profiles** (2026-09-30): hand-off `docs/handoffs/2026-09-30-tab-profiles.md`,
   spec `docs/specs/2026-09-30-tab-profiles-amendment.md`, plan
-  `docs/plans/2026-09-30-tab-profiles-plan.md`. Code complete as v0.9.0 on
-  `feature/tab-profiles` (stacked on the 0.8.0 branch): named tabs that run Claude in a
-  worktree outside the project folder with their own arguments, per-tab cwd root for
-  every channel, attribution by cwd, resume-only-what-ran-there, keep-open at project
-  open. Awaiting the Acme live check (plan), which also covers 0.8.0.
+  `docs/plans/2026-09-30-tab-profiles-plan.md`. Code complete as v0.9.0: named tabs that
+  run Claude in a worktree outside the project folder with their own arguments, per-tab
+  cwd root for every channel, attribution by cwd, resume-only-what-ran-there, keep-open
+  at project open. Live in WebStorm since 2026-09-30 (Acme `acme-worker1/2`): no
+  carry-over of main-clone sessions, registry `tab`/`cwd` correct, resume in the
+  worktrees across four restarts, no freeze, launch publish complete. Not exercised: the
+  "Open Profile Tabs" action, keep-open recreation of a closed tab, renaming a profile
+  tab. Two `check-restart.sh` defects recorded in the plan.
 
 ## Backlog
 
-- [ ] v0.6.6 GitHub release - cut once the reuse-existing decoration fix is confirmed
-  live (expected: the renamed acme-server tab comes back as "Local (2)" with the icon).
+- [ ] **Release.** Nothing is tagged after `v0.6.5`; 0.6.6 and 0.7.0 are on `main`,
+  0.8.0 and 0.9.0 on `feature/tab-profiles`. Every one of them has run live. Decide
+  whether to tag the intermediate versions or merge and release 0.9.0 (or 0.9.1 with the
+  registry `title` fix) alone.
 - [x] `CHANGELOG.md` backfilled 0.6.0-0.7.0 (2026-09-17); keep it in sync with the
   `plugin.xml` change-notes from now on.
 - [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).
@@ -61,7 +66,9 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
 - [x] Tests: 59 across validators, command assembly, resume fallback, hook installer,
   registry service (read, sweep liveness), transcript cwd reader, path matching, and the
   hook script itself (run under bash + jq).
-- [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` once the v2 hook is live.
+- [ ] Delete the stale `~/.claude/ide-events/sessions.jsonl` by hand. Unblocked: the v2
+  hook has been live since 2026-09-18 and the file has not changed since then (1.1 MB,
+  last written 2026-09-18 16:27).
 - [ ] Session picker ("Bind to Session...") on a profile tab lists the project folder's
   sessions; list the profile directory's instead.
 - [ ] Orphaned bindings whose tabs were closed weeks ago survive every restart (4 of 23
