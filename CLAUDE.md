@@ -58,6 +58,10 @@ sessions to terminal tabs and resumes them across IDE restarts. Repo:
   them directly.
 - Comments explain WHY (the observed failure that motivated the code), matching the
   existing density. No emoji anywhere in the repo.
+- The repo is public: never name the external orchestrator, its plugins or
+  marketplaces, or client projects in code, tests, docs or commit messages. Use the
+  placeholders in `docs/decisions/2026-10-08-placeholder-names-in-public-repo.md`
+  (Acme / Shop / Work, `plugin:inbox-channel@local-tools`, "the orchestrator").
 - Guard-clause exits in detection code log at INFO, not DEBUG - DEBUG is invisible in
   production logs and made past failures undiagnosable.
 - `TabBindingCoordinator.bindOrUpdate` is the ONLY write path for tab-session bindings.
