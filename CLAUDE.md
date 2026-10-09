@@ -53,9 +53,10 @@ sessions to terminal tabs and resumes them across IDE restarts. Repo:
 ## Code rules
 
 - Kotlin, IntelliJ Platform APIs; `sinceBuild = 261`, no `untilBuild`. Every build must
-  pass `verifyPlugin` against the recommended targets (currently 261 and 262) - 262 removed
-  API that 261 had (see PRD section 4); resolve such members reflectively, never call
-  them directly.
+  pass `verifyPlugin` against its pinned targets - WebStorm 2026.1.5 (the 261 floor) and
+  the locally installed WebStorm (262 today); never `recommended()`, which downloads every
+  newer release and EAP into the Gradle cache. 262 removed API that 261 had (see PRD
+  section 4); resolve such members reflectively, never call them directly.
 - Comments explain WHY (the observed failure that motivated the code), matching the
   existing density. No emoji anywhere in the repo.
 - The repo is public: never name the external orchestrator, its plugins or

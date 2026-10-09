@@ -12,9 +12,11 @@ ls build/distributions/          # claude-session-manager-<version>.zip
 ```
 
 - Compiles against the local `~/Applications/WebStorm.app` (override with
-  `-PlocalIdePath=...`). `verifyPlugin` targets `recommended()` = latest 261 + 262 and
-  must be clean; a `NoSuchMethodError`-class finding on one target means an API that
-  the other target still has - resolve it reflectively.
+  `-PlocalIdePath=...`). `verifyPlugin` targets WebStorm 2026.1.5 (the 261 floor) and
+  the same local WebStorm, pinned in `build.gradle.kts` (`recommended()` downloaded every
+  newer release and EAP, ~4 GB each, and filled the disk), and must be clean; a
+  `NoSuchMethodError`-class finding on one target means an API that the other target
+  still has - resolve it reflectively.
 - `buildSearchableOptions` is disabled (known issue with local IDE builds).
 
 ## Install

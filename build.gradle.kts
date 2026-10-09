@@ -1,3 +1,5 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.3.0"
@@ -73,7 +75,12 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            recommended()
+            // Pinned, not recommended(): with no untilBuild, recommended() resolved every newer
+            // release and EAP, downloaded and extracted each (~4 GB a build) and nothing removed
+            // the old ones - four WebStorm builds, 15 GB of Gradle cache on 2026-10-09. The two
+            // builds that matter are the sinceBuild floor and the WebStorm actually installed.
+            create(IntelliJPlatformType.WebStorm, "2026.1.5")
+            local(providers.gradleProperty("localIdePath").getOrElse("/Users/jendalen/Applications/WebStorm.app"))
         }
     }
 }
