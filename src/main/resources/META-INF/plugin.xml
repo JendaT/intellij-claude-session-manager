@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.github.jendalen.claudesessionmanager</id>
     <name>Claude Session Manager</name>
-    <vendor email="jenda@dalen.cz" url="https://github.com/jendalen">Jenda Tresnak</vendor>
+    <vendor url="https://github.com/JendaT">Jenda Tresnak</vendor>
 
     <description><![CDATA[
         Persist Claude Code sessions across terminal tabs in JetBrains IDEs.

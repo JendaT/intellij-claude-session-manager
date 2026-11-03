@@ -1,6 +1,6 @@
 # Runbook - build, install, diagnose, audit
 
-Machine-specific procedures for the plugin's development loop on jendalen's Mac.
+Machine-specific procedures for the plugin's development loop on the maintainer's Mac.
 Paths change with IDE versions; always check `ls ~/Library/Logs/JetBrains/` first.
 
 ## Build and verify

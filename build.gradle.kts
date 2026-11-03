@@ -26,7 +26,7 @@ dependencies {
         // Compile against a local JetBrains IDE installation.
         // The plugin runs in all JetBrains IDEs (WebStorm, PyCharm, IDEA, CLion, PHPStorm).
         // Override via: ./gradlew build -PlocalIdePath=/path/to/IDE.app
-        local(providers.gradleProperty("localIdePath").getOrElse("/Users/jendalen/Applications/WebStorm.app"))
+        local(providers.gradleProperty("localIdePath").getOrElse(System.getProperty("user.home") + "/Applications/WebStorm.app"))
 
         // Terminal plugin dependency
         bundledPlugin("org.jetbrains.plugins.terminal")
@@ -59,7 +59,7 @@ intellijPlatform {
 
         vendor {
             name = "Jenda Tresnak"
-            url = "https://github.com/jendalen"
+            url = "https://github.com/JendaT"
         }
     }
 
@@ -80,7 +80,7 @@ intellijPlatform {
             // the old ones - four WebStorm builds, 15 GB of Gradle cache on 2026-10-09. The two
             // builds that matter are the sinceBuild floor and the WebStorm actually installed.
             create(IntelliJPlatformType.WebStorm, "2026.1.5")
-            local(providers.gradleProperty("localIdePath").getOrElse("/Users/jendalen/Applications/WebStorm.app"))
+            local(providers.gradleProperty("localIdePath").getOrElse(System.getProperty("user.home") + "/Applications/WebStorm.app"))
         }
     }
 }

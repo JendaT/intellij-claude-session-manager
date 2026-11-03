@@ -303,7 +303,7 @@ the owner's call - recorded here, not decided here.
 3. All four worktree projects reopen with every bound tab resumed, no click.
 4. No `teams` code or settings remain; `./gradlew test` passes with the new tests.
 
-## Decisions (2026-09-17, owner jendalen)
+## Decisions (2026-09-17, owner)
 
 1. **`waiting` state added.** `Notification` hook with matcher `permission_prompt` ->
    `state: waiting`; cleared by the next `PreToolUse` or `Stop`. Registry state is

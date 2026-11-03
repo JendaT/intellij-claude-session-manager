@@ -223,4 +223,4 @@ Apache 2.0
 
 ## Author
 
-Jan Dalen ([@JendaT](https://github.com/JendaT))
+Jenda Tresnak ([@JendaT](https://github.com/JendaT))
