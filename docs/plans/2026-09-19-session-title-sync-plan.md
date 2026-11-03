@@ -37,7 +37,8 @@ beyond D13 (the sidecar and the transcript are READ only).
 - [~] Live verification checklist (below) - partly observed 2026-09-30..2026-10-05 in
       WebStorm (installed 2026-09-30 with 0.9.0, which carries 0.8.0). Inbound rename
       works and persists; the outbound push has never run; one defect found (registry
-      `title` lost on restart, "Found during live verification" below).
+      `title` lost on restart, "Found during live verification" below), fixed in 0.9.1
+      and verified live 2026-11-03.
 
 ## Step 1 - Binding model carries the title state
 
@@ -236,13 +237,13 @@ implementation summary lists what is unit tested versus what needs the live chec
 
 ## Live verification checklist (after install, both IDEs)
 
-- [~] `/rename foo` in a bound tab renames the tab to `foo` within ~5 s; the log has
+- [x] `/rename foo` in a bound tab renames the tab to `foo` within ~5 s; the log has
       "Applied Claude session title 'foo'"; the registry file shows `"title": "foo"`
       and `"tab": "foo"`; after an IDE restart the tab comes back as `foo` and resumes.
       Observed 2026-09-30 20:47 (WebStorm, Acme): session `8e9fd95c` "reports title
       'acme-aux' (was '')", applied to tab 'Main Claude'; registry `"tab": "acme-aux"`;
       the tab came back as `acme-aux` and resumed after the 10-01, 10-02 and two 10-04
-      restarts. **Fails on `"title"`**: the registry file has none (defect below).
+      restarts. `"title"` failed on 2026-10-05 (defect below); holds since 0.9.1.
 - [ ] (not exercised: no "Pushed '/rename" line in either IDE's retained logs, which
       reach back to 2026-09-27 in WebStorm and 2026-09-30 in IDEA)
       Rename an idle bound tab in the IDE to `bar`: Claude prints "Session renamed to:
@@ -262,7 +263,9 @@ implementation summary lists what is unit tested versus what needs the live chec
 - [x] **Registry `title` is lost after the first restart.** Fixed 2026-10-07 in 0.9.1
       (`TabBindingCoordinator.registerSession`; `HookScriptTest` covers the restart
       sequence against the real hook script; the coordinator lookup itself is verified
-      live only). Every titled Acme session
+      live only). Verified live 2026-11-03: after the WebStorm restarts at 12:49 and
+      13:59, 18 of 26 registry files with a project carry `title`, `acme-aux`,
+      `acme-main` and `pg18` among them - all three had none on 2026-10-05. Every titled Acme session
       (`acme-aux`, `acme-main`, `pg18`, `unify-be-fe-translation-keys`) has a registry file
       without `title` on 2026-10-05. `SessionTitleSyncService.applyInbound` publishes
       `title` only when the title differs from `binding.sessionTitle`; `SessionEnd` (hook)

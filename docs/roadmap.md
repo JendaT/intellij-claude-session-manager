@@ -1,6 +1,6 @@
 ---
 type: roadmap
-last_updated: 2026-10-05
+last_updated: 2026-11-03
 ---
 
 # Claude Session Manager - roadmap
@@ -28,9 +28,10 @@ discovering issues. Shipped detail lives in `docs/prd.md` and the change-notes.
 
 ## In flight
 
-Branch state 2026-10-05: `main` = 0.7.0. `feature/session-title-sync` (0.8.0) and
-`feature/tab-profiles` (0.9.0, stacked on it, plus three fixes 2026-09-30..10-01) are not
-merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-01.
+Branch state 2026-11-03: `main` carries 0.9.1 - 0.8.0, 0.9.0, 0.9.1 and the pinned
+verifier targets, fast-forwarded from `feature/tab-profiles` - and is pushed to GitHub.
+Both IDEs run 0.9.1 (WebStorm restarted 2026-11-01 and 11-03, IDEA 10-08 and 11-03). The
+two items below stay open only for their remaining live checks.
 
 - [~] **Session title sync** (2026-09-19): spec
   `docs/specs/2026-09-19-session-title-sync-amendment.md`, plan
@@ -39,7 +40,8 @@ merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-
   `/rename` -> tab rename observed and persistent across restarts. Open: the outbound
   push has never run (whether the reworked terminal's `sendText` delivers a bare CR to
   Claude's prompt box is still unknown). The registry `title` lost after the first
-  restart is fixed in 0.9.1 (2026-10-07, awaiting a live check after restart).
+  restart is fixed in 0.9.1 and verified live 2026-11-03: after two WebStorm restarts,
+  18 of the 26 registry files with a project carry `title`.
 
 - [~] **Tab profiles** (2026-09-30): hand-off `docs/handoffs/2026-09-30-tab-profiles.md`,
   spec `docs/specs/2026-09-30-tab-profiles-amendment.md`, plan
@@ -54,9 +56,9 @@ merged. Both IDEs run the `feature/tab-profiles` head (`6993180`) since 2026-10-
 
 ## Backlog
 
-- [ ] **Release.** Nothing is tagged after `v0.6.5`; 0.6.6 and 0.7.0 are on `main`,
-  0.8.0 and 0.9.0 on `feature/tab-profiles`. Every one of them has run live. Decide
-  whether to tag the intermediate versions or merge and release 0.9.1 alone.
+- [ ] **Release.** Nothing is tagged after `v0.6.5`; 0.6.6 through 0.9.1 are on `main`
+  (pushed 2026-11-03) and 0.9.1 runs in both IDEs. Decide whether to tag the
+  intermediate versions or release 0.9.1 alone.
 - [x] `CHANGELOG.md` backfilled 0.6.0-0.7.0 (2026-09-17); keep it in sync with the
   `plugin.xml` change-notes from now on.
 - [x] `README.md` refreshed for 0.7.0 (storage path, requirements, settings, registry).

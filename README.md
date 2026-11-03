@@ -27,7 +27,7 @@ Keep multiple Claude sessions organized - each terminal tab remembers its sessio
 *(Coming soon)*
 
 ### Manual Installation
-1. Download the latest `.zip` from [Releases](https://github.com/jendalen/claude-session-manager/releases)
+1. Download the latest `.zip` from [Releases](https://github.com/JendaT/intellij-claude-session-manager/releases)
 2. In your IDE: **Settings → Plugins → ⚙️ → Install Plugin from Disk...**
 3. Select the downloaded zip file
 4. Restart the IDE
@@ -223,4 +223,4 @@ Apache 2.0
 
 ## Author
 
-Jan Dalen ([@jendalen](https://github.com/jendalen))
+Jan Dalen ([@JendaT](https://github.com/JendaT))
