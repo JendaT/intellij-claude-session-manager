@@ -140,6 +140,42 @@ The plugin uses multiple detection methods:
 
 Bindings are stored in `.idea/workspace.xml` (component `ClaudeSessionBindings`) within your project.
 
+## Driving sessions from outside the IDE (Claude Code channels)
+
+The launch profile, tab profiles and session registry exist so that a program outside the
+IDE can hand work to Claude Code sessions running in IDE terminal tabs. The author uses them
+as the IDE half of a local daemon that dispatches tasks to one Claude session per git
+worktree through Claude Code channels. The daemon is not part of this repository and the
+plugin knows nothing about it: everything goes through files and launch flags, so the same
+pieces work for any orchestrator.
+
+How the pieces fit:
+
+1. **Launch** - a launch profile (or a tab profile, for a worktree outside the project) adds
+   `--channels plugin:<name>@<marketplace>` to every launch, so each session loads a channel
+   plugin: an MCP server that can push messages into the session.
+2. **Restore** - after an IDE restart every bound tab resumes by itself, so the whole set of
+   sessions comes back without a click.
+3. **Discover and route** - the session registry says which sessions exist, where each runs
+   (`cwd`), whether it can take work (`pid` alive and `state` is `idle`) and what to call it
+   (`title`, else `tab`). Route by `cwd` and compare with a trailing `/`: `/work/app` is a
+   string prefix of `/work/app-worktree1`.
+
+Lessons from building it (Claude Code 2.1.278, macOS, September 2026):
+
+- Activate the channel with `--channels` and an allowlist in managed settings
+  (`/Library/Application Support/ClaudeCode/managed-settings.json`):
+  `{"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "...", "plugin": "..."}]}`.
+  Both keys are required and only the object form is accepted. Without `channelsEnabled`
+  the session still loads the plugin's MCP tools but drops channel events, with no error.
+  `--dangerously-load-development-channels` shows a blocking dialog on every launch, which
+  stops an unattended restore.
+- A channel server runs once per session. If it listens on a fixed port, only the first
+  session gets the port and the others lose their channel; have each instance connect out
+  to the daemon instead (long-poll) and register its `cwd` and session id.
+- A user-scope channel plugin loads in every Claude session on the machine, IDE or not.
+  Make it do nothing unless its `cwd` is a directory the daemon manages.
+
 ## Troubleshooting
 
 ### "Not Installed (action required)"
